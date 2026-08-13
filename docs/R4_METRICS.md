@@ -40,7 +40,7 @@ The runtime records:
 - per worker: completed blocks/scenarios, assignment wait, block computation,
   and completion-queue wait;
 - per executed block: computation latency indexed by stable `block_id`;
-- scheduler: total time spent submitting to the bounded assignment queue;
+- scheduler: total time blocked because the bounded assignment queue was full;
 - coordinator: completion-queue wait and result validation/consumption time;
 - queues: maximum observed depth, updated while the existing queue mutex is
   held so no second synchronization mechanism is introduced;
@@ -49,6 +49,13 @@ The runtime records:
 - per newly installed result and per newly installed checkpoint latency;
 - durable stage totals for write, file `fsync`, rename, and directory `fsync`,
   plus installed file counts and bytes.
+
+Queue wait fields count condition-variable blocking caused by a full or empty
+queue. An immediately successful push/pop contributes zero; mutex acquisition
+and ordinary queue-operation overhead are intentionally excluded. Per-worker
+counters accumulate in worker-local storage and publish once at thread exit,
+while scheduler/coordinator totals remain local to their owning threads. This
+avoids turning the measurement object itself into a false-sharing hotspot.
 
 Durable file counts and bytes advance only after the complete atomic-install
 protocol succeeds. A pre-existing immutable file with identical bytes is not a
@@ -65,6 +72,13 @@ Per-block vectors use zero as an explicit missing-sample sentinel:
   for that block;
 - an empty checkpoint vector means no checkpoint was installed.
 
+All per-block, worker, and expected checkpoint storage is allocated before
+threads start or before a durable directory is modified. Direct store users can
+checkpoint more often than the configured cadence; once the preallocated sample
+capacity is full, the manifest still commits and `checkpoint_samples_dropped`
+increments without allocating or throwing. This preserves durability semantics
+when observability capacity is exhausted.
+
 Clock measurements of actual operations are expected to be positive on the
 supported platforms. If the clock cannot resolve a positive interval, an actual
 operation is recorded as one nanosecond so it cannot collide with the missing
@@ -74,9 +88,10 @@ accepted quantile range is `[0, 1]`, with zero selecting the minimum and one the
 maximum. CLI summaries currently emit p50, p95, and p99.
 
 The vectors are bounded by `max_materialized_blocks`, the same limit that guards
-the eager block universe. This makes opt-in memory cost explicit: two
-`uint64_t` vectors require 16 bytes per materialized block, excluding vector
-bookkeeping. The disabled path allocates neither vector.
+the eager block universe. This makes opt-in memory cost explicit: the two
+per-block `uint64_t` vectors require 16 bytes per materialized block, with up to
+another 8 bytes per expected checkpoint plus worker records and vector
+bookkeeping. The disabled path allocates none of this storage.
 
 ## Command-line and benchmark use
 
@@ -104,10 +119,13 @@ metrics fields are not a general-purpose concurrent aggregation API.
 - Metrics-enabled and disabled executions produce bit-for-bit identical final
   aggregates.
 - Worker block/scenario counters cover the executed universe exactly.
+- Queue wait counters distinguish immediate operations from real blocking.
 - Queue peaks never exceed configured bounded capacities.
 - A fresh durable run reports the exact number of metadata, result, and
   checkpoint files installed under the selected checkpoint policy.
 - A completed durable restart reports zero computation and zero new writes.
+- Direct store use reports open/result/checkpoint timing; excess checkpoint
+  samples degrade through an explicit dropped-sample counter.
 - Invalid or non-finite percentile quantiles fail closed.
 - Optimized, ASan/UBSan, ThreadSanitizer, and CMake/CTest suites pass.
 

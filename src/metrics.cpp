@@ -6,7 +6,16 @@
 
 namespace mc {
 
-void RuntimeMetrics::reset(std::size_t block_count) {
+void RuntimeMetrics::reset(std::size_t block_count,
+                           std::size_t worker_capacity,
+                           std::size_t checkpoint_capacity) {
+    std::vector<WorkerMetrics> next_workers;
+    next_workers.reserve(worker_capacity);
+    std::vector<std::uint64_t> next_block_compute(block_count, 0U);
+    std::vector<std::uint64_t> next_result_persist(block_count, 0U);
+    std::vector<std::uint64_t> next_checkpoints;
+    next_checkpoints.reserve(checkpoint_capacity);
+
     total_elapsed_ns = 0U;
     durable_open_ns = 0U;
     scheduler_assignment_wait_ns = 0U;
@@ -15,10 +24,11 @@ void RuntimeMetrics::reset(std::size_t block_count) {
     fixed_tree_reduce_ns = 0U;
     max_assignment_queue_depth = 0U;
     max_completion_queue_depth = 0U;
-    workers.clear();
-    block_compute_ns.assign(block_count, 0U);
-    result_persist_ns.assign(block_count, 0U);
-    checkpoint_ns.clear();
+    workers.swap(next_workers);
+    block_compute_ns.swap(next_block_compute);
+    result_persist_ns.swap(next_result_persist);
+    checkpoint_ns.swap(next_checkpoints);
+    checkpoint_samples_dropped = 0U;
     durable_io = {};
 }
 

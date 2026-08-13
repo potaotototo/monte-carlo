@@ -124,6 +124,16 @@ Implemented:
 - exact-result-neutrality, counter-coverage, bounded-depth, durable file-count,
   and zero-work completed-restart tests.
 
+Post-implementation audit fixes:
+
+- queue waits now count only actual full/empty condition-variable blocking,
+  rather than charging every push/pop call as contention;
+- worker, scheduler, and coordinator accumulation is thread-local until join,
+  avoiding measurement-induced false sharing;
+- direct `DurableRunStore` users receive open, result, and checkpoint latency;
+- metric vectors are preallocated before execution/durable mutation, and excess
+  direct checkpoint samples are counted and dropped without affecting commit.
+
 Design decisions: metrics remain outside every persisted schema and identity;
 the metrics pointer is non-owning; zero is a missing per-block sample; latency
 percentiles ignore missing samples and use nearest rank. The benchmark reports
@@ -133,7 +143,7 @@ surplus requested workers.
 The detailed contract, overhead caveats, edge cases, and deferred R4 work are
 documented in `R4_METRICS.md`.
 
-Acceptance evidence: optimized, ASan/UBSan, and ThreadSanitizer builds pass
-34/34 tests; an independent CMake Release build passes CTest; and a 256-seed
-post-instrumentation R3 regression passes with 9/9 crash-point coverage and the
-full topology-diversity gate.
+Acceptance evidence after the metrics bug audit: optimized, ASan/UBSan, and
+ThreadSanitizer builds pass 36/36 tests; an independent CMake Release build
+passes CTest; and a 256-seed post-instrumentation R3 regression passes with 9/9
+crash-point coverage and the full topology-diversity gate.

@@ -306,6 +306,13 @@ of one does not say how long the queue stayed occupied. Per-worker fields are
 written only by their owning worker and read after joins; block fields are
 written once by the worker assigned that stable block ID.
 
+Queue wait totals include only condition-variable blocking caused by a full or
+empty queue. Fast operations contribute zero, and mutex acquisition is outside
+this boundary. Worker totals are accumulated in worker-local objects and
+published once at exit; scheduler and coordinator totals likewise remain owned
+by their threads. This prevents adjacent shared counters from manufacturing the
+contention the metrics are intended to diagnose.
+
 Durable file counters name only newly and fully installed artifacts. Stage
 timers may include a successful write or sync from an attempt that later fails,
 whereas file counts and bytes advance after the full installation protocol.
@@ -319,3 +326,10 @@ however, adding their implementation changes the runtime source digest and thus
 the build fingerprint, so an R3 store still requires its R3-tagged binary.
 Additive duration and byte totals saturate at `UINT64_MAX`; wrapping to a small
 and plausible-looking value would be more dangerous than an explicit ceiling.
+
+Metrics storage is allocated before execution or before a durable directory is
+modified. The checkpoint vector is sized from the configured cadence. A direct
+store caller may deliberately exceed that cadence; excess latency observations
+increment `checkpoint_samples_dropped` while the manifest operation continues.
+Metrics exhaustion must never turn a successfully installed manifest into an
+exception after the fact.

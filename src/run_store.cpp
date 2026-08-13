@@ -79,6 +79,23 @@ void add_metric(std::uint64_t& total, std::uint64_t value) noexcept {
                 : total + value;
 }
 
+class DurableOpenMetricsTimer {
+public:
+    DurableOpenMetricsTimer(RuntimeMetrics* metrics,
+                            MetricsClock::time_point started) noexcept
+        : metrics_(metrics), started_(started) {}
+
+    ~DurableOpenMetricsTimer() {
+        if (metrics_ != nullptr) {
+            metrics_->durable_open_ns = metrics_elapsed_ns(started_);
+        }
+    }
+
+private:
+    RuntimeMetrics* metrics_;
+    MetricsClock::time_point started_;
+};
+
 void hit_write_failure(FailureInjector* injector,
                        const DurableWriteContext& context,
                        FailurePoint result_point,
@@ -727,7 +744,8 @@ RunMetadata expected_metadata(const RunSpec& spec,
     config.validate(spec);
     const std::uint64_t block_count =
         1U + (spec.total_scenarios - 1U) / config.block_size;
-    if (block_count > config.max_materialized_blocks) {
+    if (block_count > config.max_materialized_blocks ||
+        block_count > std::numeric_limits<std::size_t>::max()) {
         throw std::length_error("durable run exceeds max_materialized_blocks");
     }
     const BuildIdentity build = current_build_identity();
@@ -1047,17 +1065,28 @@ DurableRunStore DurableRunStore::open(
     const EngineConfig& engine_config,
     const RunStoreConfig& store_config,
     RuntimeMetrics* metrics) {
+    MetricsClock::time_point open_started{};
     if (metrics != nullptr) {
+        open_started = MetricsClock::now();
         metrics->reset(0U);
     }
+    const DurableOpenMetricsTimer open_timer(metrics, open_started);
     store_config.validate();
     const RunMetadata expected = expected_metadata(spec, engine_config);
-    if (metrics != nullptr) {
-        metrics->reset(static_cast<std::size_t>(expected.block_count));
-    }
     const RunStoreConfig resolved_store_config =
         resolve_checkpoint_cadence(store_config, expected.block_count);
     const RunStoreConfig& config = resolved_store_config;
+    if (metrics != nullptr) {
+        const std::size_t block_count =
+            static_cast<std::size_t>(expected.block_count);
+        const std::size_t worker_capacity =
+            std::min(engine_config.worker_count, block_count);
+        const std::uint64_t checkpoint_count =
+            1U + (expected.block_count - 1U) /
+                     config.checkpoint_interval_blocks;
+        metrics->reset(block_count, worker_capacity,
+                       static_cast<std::size_t>(checkpoint_count));
+    }
     auto failure_injector = std::make_unique<FailureInjector>(
         spec, engine_config, config);
 
@@ -1274,6 +1303,10 @@ std::filesystem::path DurableRunStore::block_result_path(
 }
 
 void DurableRunStore::record_result(const BlockResult& result) {
+    MetricsClock::time_point persist_started{};
+    if (metrics_ != nullptr) {
+        persist_started = MetricsClock::now();
+    }
     if (recovery_state_.status != DurableRunStatus::Running) {
         throw std::runtime_error("cannot record a result for a non-running store");
     }
@@ -1328,6 +1361,10 @@ void DurableRunStore::record_result(const BlockResult& result) {
                                     result.block.block_id,
                                     kNoFailureContext}});
     durable_results_[index] = result;
+    if (metrics_ != nullptr) {
+        metrics_->result_persist_ns[index] =
+            metrics_elapsed_ns(persist_started);
+    }
 }
 
 void DurableRunStore::checkpoint(
@@ -1336,6 +1373,10 @@ void DurableRunStore::checkpoint(
     const std::vector<bool>& received,
     DurableRunStatus status,
     std::optional<FailureRecord> failure) {
+    MetricsClock::time_point checkpoint_started{};
+    if (metrics_ != nullptr) {
+        checkpoint_started = MetricsClock::now();
+    }
     if (recovery_state_.status != DurableRunStatus::Running) {
         throw std::runtime_error("cannot checkpoint a non-running store");
     }
@@ -1425,6 +1466,15 @@ void DurableRunStore::checkpoint(
     recovery_state_.status = status;
     for (const std::size_t index : newly_committed) {
         recovery_state_.committed_results[index] = durable_results_[index];
+    }
+    if (metrics_ != nullptr) {
+        if (metrics_->checkpoint_ns.size() <
+            metrics_->checkpoint_ns.capacity()) {
+            metrics_->checkpoint_ns.push_back(
+                metrics_elapsed_ns(checkpoint_started));
+        } else {
+            add_metric(metrics_->checkpoint_samples_dropped, 1U);
+        }
     }
 }
 

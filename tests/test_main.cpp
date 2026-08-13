@@ -1,4 +1,5 @@
 #include "mc/aggregate.hpp"
+#include "mc/bounded_queue.hpp"
 #include "mc/codec.hpp"
 #include "mc/coordinator.hpp"
 #include "mc/engine.hpp"
@@ -28,6 +29,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unistd.h>
 #include <utility>
 #include <vector>
@@ -1583,6 +1585,108 @@ void runtime_metrics_are_opt_in_and_result_neutral() {
         "latency percentile accepted a non-finite quantile");
 }
 
+void bounded_queue_reports_only_actual_blocking() {
+    mc::BoundedQueue<int> queue(1U);
+    std::uint64_t push_wait_ns = 999U;
+    check(queue.push(1, &push_wait_ns) && push_wait_ns == 0U,
+          "an immediately available queue push reported blocking");
+
+    int value = 0;
+    std::uint64_t pop_wait_ns = 999U;
+    check(queue.pop(value, &pop_wait_ns) && value == 1 &&
+              pop_wait_ns == 0U,
+          "an immediately available queue pop reported blocking");
+
+    std::uint64_t blocked_pop_ns = 0U;
+    std::thread producer([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds{25});
+        static_cast<void>(queue.push(2));
+    });
+    check(queue.pop(value, &blocked_pop_ns) && value == 2,
+          "blocked queue pop did not receive the produced value");
+    producer.join();
+    check(blocked_pop_ns > 0U,
+          "a condition-variable wait was not reported as blocking");
+
+    queue.close();
+    pop_wait_ns = 999U;
+    check(!queue.pop(value, &pop_wait_ns) && pop_wait_ns == 0U,
+          "an already closed queue reported a blocking wait");
+}
+
+void direct_store_metrics_cover_open_and_preallocate() {
+    TemporaryDirectory directory;
+    mc::RunSpec spec;
+    spec.total_scenarios = 512U;
+    mc::EngineConfig config;
+    config.worker_count = 3U;
+    config.block_size = 64U;
+    mc::RunStoreConfig store_config;
+    store_config.run_directory = directory.path();
+    store_config.checkpoint_interval_blocks = 2U;
+    store_config.min_free_space_bytes = 0U;
+
+    mc::RuntimeMetrics metrics;
+    metrics.durable_open_ns = 999U;
+    metrics.block_compute_ns = {999U};
+    {
+        mc::DurableRunStore store = mc::DurableRunStore::open(
+            spec, config, store_config, &metrics);
+        check(metrics.durable_open_ns > 0U,
+              "direct durable-store open omitted its elapsed time");
+        check(metrics.block_compute_ns.size() == 8U &&
+                  metrics.result_persist_ns.size() == 8U,
+              "direct durable-store open did not reset the block universe");
+        check(metrics.workers.empty() && metrics.workers.capacity() >= 3U,
+              "worker metrics were not preallocated before durable writes");
+        check(metrics.checkpoint_ns.empty() &&
+                  metrics.checkpoint_ns.capacity() >= 4U,
+              "checkpoint metrics were not preallocated before durable writes");
+        check(metrics.durable_io.metadata_files_installed == 1U &&
+                  metrics.durable_io.manifest_files_installed == 1U,
+              "direct durable-store open did not count installed metadata");
+
+        const std::vector<mc::ScenarioBlock> blocks =
+            store.recovery_state().blocks;
+        mc::CoordinatorState coordinator =
+            mc::make_coordinator_state(spec, config, blocks);
+        std::vector<mc::AggregateStats> leaves(blocks.size());
+        std::vector<bool> received(blocks.size(), false);
+        commit_test_block(store, spec, config, 0U, coordinator,
+                          leaves, received);
+        store.checkpoint(coordinator, leaves, received);
+        check(metrics.result_persist_ns[0] > 0U &&
+                  metrics.checkpoint_ns.size() == 1U &&
+                  metrics.checkpoint_samples_dropped == 0U,
+              "direct store operations omitted latency samples");
+
+        // Direct store users may checkpoint more often than the configured
+        // cadence. Once the preallocated sample budget is full, observability
+        // must degrade without allocating or failing after durable commit.
+        for (std::size_t index = 0;
+             index < metrics.checkpoint_ns.capacity(); ++index) {
+            store.checkpoint(coordinator, leaves, received);
+        }
+        check(metrics.checkpoint_ns.size() ==
+                  metrics.checkpoint_ns.capacity() &&
+                  metrics.checkpoint_samples_dropped == 1U,
+              "excess direct checkpoints did not report a dropped sample");
+    }
+
+    mc::RunStoreConfig invalid_store_config;
+    metrics.durable_open_ns = 999U;
+    metrics.block_compute_ns = {999U};
+    check_throws(
+        [&] {
+            static_cast<void>(mc::DurableRunStore::open(
+                spec, config, invalid_store_config, &metrics));
+        },
+        "invalid durable-store configuration unexpectedly opened");
+    check(metrics.durable_open_ns > 0U &&
+              metrics.block_compute_ns.empty(),
+          "failed direct open retained stale metrics or omitted elapsed time");
+}
+
 void durable_metrics_capture_only_new_io() {
     TemporaryDirectory directory;
     mc::RunSpec spec;
@@ -1791,6 +1895,10 @@ int main(int argc, char** argv) {
          coordinator_validation_state_machine},
         {"runtime_metrics_are_opt_in_and_result_neutral",
          runtime_metrics_are_opt_in_and_result_neutral},
+        {"bounded_queue_reports_only_actual_blocking",
+         bounded_queue_reports_only_actual_blocking},
+        {"direct_store_metrics_cover_open_and_preallocate",
+         direct_store_metrics_cover_open_and_preallocate},
         {"durable_metrics_capture_only_new_io",
          durable_metrics_capture_only_new_io},
         {"block_universe_and_resource_preflight",

@@ -41,9 +41,14 @@ struct RuntimeMetrics {
     // Zero means no new durable result was installed for this block.
     std::vector<std::uint64_t> result_persist_ns;
     std::vector<std::uint64_t> checkpoint_ns;
+    std::uint64_t checkpoint_samples_dropped = 0;
     DurableIoMetrics durable_io;
 
-    void reset(std::size_t block_count);
+    // Preallocates every requested sample slot before execution starts. This
+    // prevents metrics growth from failing after durable state has changed.
+    void reset(std::size_t block_count,
+               std::size_t worker_capacity = 0,
+               std::size_t checkpoint_capacity = 0);
 };
 
 // Uses the nearest-rank definition and ignores zero sentinel entries.

@@ -1,8 +1,10 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
+#include <cstdint>
 #include <deque>
 #include <mutex>
 #include <stdexcept>
@@ -24,9 +26,15 @@ public:
     BoundedQueue(const BoundedQueue&) = delete;
     BoundedQueue& operator=(const BoundedQueue&) = delete;
 
-    bool push(T item) {
+    bool push(T item, std::uint64_t* blocked_ns = nullptr) {
         std::unique_lock lock(mutex_);
+        const bool blocked = blocked_ns != nullptr && !closed_ &&
+                             queue_.size() >= capacity_;
+        const auto wait_started = blocked && blocked_ns != nullptr
+                                      ? Clock::now()
+                                      : Clock::time_point{};
         not_full_.wait(lock, [this] { return closed_ || queue_.size() < capacity_; });
+        record_blocked_time(blocked_ns, blocked, wait_started);
         if (closed_) {
             return false;
         }
@@ -39,9 +47,14 @@ public:
         return true;
     }
 
-    bool pop(T& output) {
+    bool pop(T& output, std::uint64_t* blocked_ns = nullptr) {
         std::unique_lock lock(mutex_);
+        const bool blocked = blocked_ns != nullptr && !closed_ && queue_.empty();
+        const auto wait_started = blocked && blocked_ns != nullptr
+                                      ? Clock::now()
+                                      : Clock::time_point{};
         not_empty_.wait(lock, [this] { return closed_ || !queue_.empty(); });
+        record_blocked_time(blocked_ns, blocked, wait_started);
         if (queue_.empty()) {
             return false;
         }
@@ -59,6 +72,23 @@ public:
     }
 
 private:
+    using Clock = std::chrono::steady_clock;
+
+    static void record_blocked_time(std::uint64_t* output,
+                                    bool blocked,
+                                    Clock::time_point started) noexcept {
+        if (output == nullptr) {
+            return;
+        }
+        if (!blocked) {
+            *output = 0U;
+            return;
+        }
+        const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            Clock::now() - started).count();
+        *output = elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 1U;
+    }
+
     std::mutex mutex_;
     std::condition_variable not_full_;
     std::condition_variable not_empty_;

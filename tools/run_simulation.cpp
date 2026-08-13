@@ -301,7 +301,9 @@ int main(int argc, char** argv) {
                                   runtime_metrics.result_persist_ns, true);
             print_latency_summary("checkpoint_ns",
                                   runtime_metrics.checkpoint_ns, true);
-            std::cout << "    \"durable_io\": {\n"
+            std::cout << "    \"checkpoint_samples_dropped\": "
+                      << runtime_metrics.checkpoint_samples_dropped << ",\n"
+                      << "    \"durable_io\": {\n"
                       << "      \"metadata_files_installed\": "
                       << runtime_metrics.durable_io.metadata_files_installed
                       << ",\n      \"result_files_installed\": "
