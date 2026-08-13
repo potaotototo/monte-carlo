@@ -1505,6 +1505,141 @@ void coordinator_validation_state_machine() {
           "wrong block observation count should be rejected");
 }
 
+void runtime_metrics_are_opt_in_and_result_neutral() {
+    mc::RunSpec spec;
+    spec.global_seed = 0x4D455452494353ULL;
+    spec.total_scenarios = 4'096U;
+    spec.num_time_steps = 8U;
+    spec.payoff_type = mc::PayoffType::AsianCall;
+    mc::EngineConfig config;
+    config.worker_count = 4U;
+    config.block_size = 256U;
+
+    const mc::RunResult baseline = mc::run_parallel(spec, config);
+    mc::RuntimeMetrics metrics;
+    const mc::RunResult observed = mc::run_parallel(spec, config, &metrics);
+    check_aggregate_exact(observed.aggregate, baseline.aggregate,
+                          "metrics changed the deterministic aggregate");
+    check(observed.block_count == baseline.block_count &&
+              observed.workers_used == baseline.workers_used,
+          "metrics changed the execution result metadata");
+    check(metrics.workers.size() == observed.workers_used,
+          "metrics did not create one record per active worker");
+    check(metrics.block_compute_ns.size() == observed.block_count &&
+              metrics.result_persist_ns.size() == observed.block_count,
+          "metrics vectors do not match the deterministic block universe");
+
+    std::uint64_t completed_blocks = 0U;
+    std::uint64_t completed_scenarios = 0U;
+    for (const mc::WorkerMetrics& worker : metrics.workers) {
+        completed_blocks += worker.blocks_completed;
+        completed_scenarios += worker.scenarios_completed;
+    }
+    check(completed_blocks == observed.block_count &&
+              completed_scenarios == spec.total_scenarios,
+          "per-worker metrics do not cover the executed block universe");
+    check(std::all_of(metrics.block_compute_ns.begin(),
+                      metrics.block_compute_ns.end(),
+                      [](std::uint64_t sample) { return sample > 0U; }),
+          "an executed block has no compute-latency sample");
+    check(std::all_of(metrics.result_persist_ns.begin(),
+                      metrics.result_persist_ns.end(),
+                      [](std::uint64_t sample) { return sample == 0U; }) &&
+              metrics.checkpoint_ns.empty(),
+          "non-durable execution reported durable latency samples");
+    check(metrics.durable_io.bytes_written == 0U &&
+              metrics.durable_io.result_files_installed == 0U,
+          "non-durable execution reported durable I/O");
+
+    const std::optional<std::uint64_t> p50 =
+        mc::latency_percentile_ns(metrics.block_compute_ns, 0.50);
+    const std::optional<std::uint64_t> p95 =
+        mc::latency_percentile_ns(metrics.block_compute_ns, 0.95);
+    const std::optional<std::uint64_t> p99 =
+        mc::latency_percentile_ns(metrics.block_compute_ns, 0.99);
+    check(p50.has_value() && p95.has_value() && p99.has_value() &&
+              *p50 <= *p95 && *p95 <= *p99,
+          "block latency percentiles are absent or non-monotonic");
+    check(metrics.max_assignment_queue_depth > 0U &&
+              metrics.max_assignment_queue_depth <=
+                  observed.workers_used * 2U &&
+              metrics.max_completion_queue_depth > 0U &&
+              metrics.max_completion_queue_depth <=
+                  observed.workers_used * 2U,
+          "observed queue peak exceeds the resolved bounded capacity");
+    check(metrics.total_elapsed_ns > 0U &&
+              metrics.fixed_tree_reduce_ns > 0U,
+          "top-level metrics did not record elapsed time");
+
+    const std::vector<std::uint64_t> no_samples{0U, 0U};
+    check(!mc::latency_percentile_ns(no_samples, 0.50).has_value(),
+          "zero sentinels were treated as latency observations");
+    check_throws(
+        [&] {
+            static_cast<void>(mc::latency_percentile_ns(
+                metrics.block_compute_ns,
+                std::numeric_limits<double>::quiet_NaN()));
+        },
+        "latency percentile accepted a non-finite quantile");
+}
+
+void durable_metrics_capture_only_new_io() {
+    TemporaryDirectory directory;
+    mc::RunSpec spec;
+    spec.global_seed = 0x44555241424C45ULL;
+    spec.total_scenarios = 1'024U;
+    spec.num_time_steps = 4U;
+    mc::EngineConfig config;
+    config.worker_count = 2U;
+    config.block_size = 128U;
+    mc::RunStoreConfig store_config;
+    store_config.run_directory = directory.path();
+    store_config.checkpoint_interval_blocks = 2U;
+    store_config.min_free_space_bytes = 0U;
+
+    const mc::RunResult baseline = mc::run_parallel(spec, config);
+    mc::RuntimeMetrics first_metrics;
+    const mc::DurableRunResult first = mc::run_parallel_durable(
+        spec, config, store_config, &first_metrics);
+    check_aggregate_exact(first.run_result.aggregate, baseline.aggregate,
+                          "durable metrics changed the deterministic result");
+    check(first.computed_blocks == 8U && first.recovered_blocks == 0U,
+          "fresh durable metrics test did not compute every block");
+    check(first_metrics.durable_io.metadata_files_installed == 1U &&
+              first_metrics.durable_io.result_files_installed == 8U &&
+              first_metrics.durable_io.manifest_files_installed == 5U,
+          "durable metrics file counts do not match the checkpoint policy");
+    check(first_metrics.durable_io.bytes_written > 0U &&
+              first_metrics.checkpoint_ns.size() == 4U,
+          "durable metrics omitted installed bytes or checkpoints");
+    check(mc::latency_percentile_ns(
+              first_metrics.result_persist_ns, 0.95).has_value() &&
+              mc::latency_percentile_ns(
+                  first_metrics.checkpoint_ns, 0.95).has_value(),
+          "durable latency samples are absent");
+
+    mc::RuntimeMetrics restart_metrics;
+    const mc::DurableRunResult restart = mc::run_parallel_durable(
+        spec, config, store_config, &restart_metrics);
+    check_aggregate_exact(restart.run_result.aggregate, baseline.aggregate,
+                          "metrics-enabled completed restart changed the result");
+    check(restart.computed_blocks == 0U && restart.recovered_blocks == 8U &&
+              restart.run_result.workers_used == 0U,
+          "completed restart performed unnecessary computation");
+    check(restart_metrics.workers.empty() &&
+              restart_metrics.checkpoint_ns.empty() &&
+              restart_metrics.durable_io.metadata_files_installed == 0U &&
+              restart_metrics.durable_io.result_files_installed == 0U &&
+              restart_metrics.durable_io.manifest_files_installed == 0U &&
+              restart_metrics.durable_io.bytes_written == 0U,
+          "completed restart reported files that it did not install");
+    check(!mc::latency_percentile_ns(
+               restart_metrics.block_compute_ns, 0.50).has_value() &&
+              !mc::latency_percentile_ns(
+                  restart_metrics.result_persist_ns, 0.50).has_value(),
+          "recovered blocks were misreported as newly computed or persisted");
+}
+
 void block_universe_and_resource_preflight() {
     mc::RunSpec spec;
     spec.total_scenarios = 100;
@@ -1654,6 +1789,10 @@ int main(int argc, char** argv) {
          r3_trace_replay_is_deterministic},
         {"coordinator_validation_state_machine",
          coordinator_validation_state_machine},
+        {"runtime_metrics_are_opt_in_and_result_neutral",
+         runtime_metrics_are_opt_in_and_result_neutral},
+        {"durable_metrics_capture_only_new_io",
+         durable_metrics_capture_only_new_io},
         {"block_universe_and_resource_preflight",
          block_universe_and_resource_preflight},
         {"numerical_parameter_guards", numerical_parameter_guards},

@@ -3,3 +3,4 @@
 /runs/
 *.tmp
 *.dSYM/
+.DS_Store

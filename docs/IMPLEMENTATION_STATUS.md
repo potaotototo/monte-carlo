@@ -105,3 +105,35 @@ Implemented:
 Acceptance evidence: optimized, ASan/UBSan, and ThreadSanitizer builds pass 32/32 tests, including all nine hooks, replay-schema-v2 integrity and resource limits, immutable evidence, incremental trace hashing, and deliberate watchdog expiry. CMake Release/CTest also passes. A fresh 1,000-seed run passed with 9/9 failure-point coverage, bitwise clean-versus-recovered equality, exact block accounting, zero-work completed restarts, six block sizes, eight block counts, four checkpoint intervals, four assignment/completion queue modes, and partial final blocks. A saved post-install descriptor was independently reproduced with the complete replay identity and ordered trace hash `b0514886f042433508499861e47e503895241ee8c9c9ba08ee03edf1013acfab`. LeakSanitizer is unavailable on this macOS runtime, so ASan used `detect_leaks=0`. TSan used `report_thread_leaks=0` because deliberate `_exit` intentionally abandons live child threads; race reports remained enabled and fatal.
 
 The exact R3 contract and tool usage are documented in `R3_FAILURE_INJECTION.md`.
+
+## R4 phase 1 — runtime and persistence instrumentation
+
+Implemented:
+
+- an optional caller-owned metrics object that leaves existing call sites and
+  the default hot path unchanged;
+- monotonic nanosecond timings for workers, scheduler backpressure,
+  coordinator waits/consumption, deterministic reduction, and total runtime;
+- per-block computation and durable-result latencies with explicit missing
+  samples for recovered blocks;
+- bounded-queue peak depths observed under the existing queue locks;
+- durable open, checkpoint, write, file-sync, rename, directory-sync, installed
+  file-count, and byte-count measurements;
+- nested CLI JSON through `--metrics` and expanded scaling-benchmark CSV
+  columns for p50/p95/p99 block latency and contention indicators;
+- exact-result-neutrality, counter-coverage, bounded-depth, durable file-count,
+  and zero-work completed-restart tests.
+
+Design decisions: metrics remain outside every persisted schema and identity;
+the metrics pointer is non-owning; zero is a missing per-block sample; latency
+percentiles ignore missing samples and use nearest rank. The benchmark reports
+metrics-enabled throughput and computes efficiency from active workers, not
+surplus requested workers.
+
+The detailed contract, overhead caveats, edge cases, and deferred R4 work are
+documented in `R4_METRICS.md`.
+
+Acceptance evidence: optimized, ASan/UBSan, and ThreadSanitizer builds pass
+34/34 tests; an independent CMake Release build passes CTest; and a 256-seed
+post-instrumentation R3 regression passes with 9/9 crash-point coverage and the
+full topology-diversity gate.

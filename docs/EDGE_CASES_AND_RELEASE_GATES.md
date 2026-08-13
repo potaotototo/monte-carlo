@@ -16,6 +16,7 @@ This document records boundary conditions found during the R1.5/R2 audits and th
 | Coordinator reconstruction | Canonical IDs/ranges, coverage, incarnations, epochs, and pair boundaries are checked after decode | Invalid snapshots fall back or fail closed | Complete |
 | Extreme model parameters | Derived constants and every path step are checked contextually | Overflow and underflow fail closed | Complete |
 | Crash handling | Atomic full manifests plus nine replayable process-crash hooks and immutable schema-v2 evidence | Power-loss/filesystem fault harness remains outside scope | R3 complete |
+| Runtime metrics | Opt-in monotonic timings, bounded queue peaks, and durable stage counters | Scheduling perturbation and missing recovered-block samples are explicit | R4 phase 1 complete |
 
 ## 1. Uniform precision and why binary64 calls for 53 random bits
 
@@ -280,3 +281,41 @@ A generated v2 descriptor has 38 short ordered fields. The reader allows 64 KiB 
 Both injection and recovery execute in supervised subprocesses. The matrix defaults to 30 seconds per phase, descriptor replay defaults to 300 seconds, and the accepted range is one second through one day. A timeout sends `SIGKILL`, reaps the process, stops the matrix, and retains the case. The upper bound prevents accidental effectively-unbounded waits while still permitting deliberately large historical workloads.
 
 The matrix keeps one worker because v2 does not control operating-system completion scheduling, but it no longer equates seed count with structural coverage. It deterministically varies block size/count, checkpoint cadence, queue capacities, partial final blocks, and model inputs. Generated block counts and checkpoint intervals guarantee occurrences one and two are reachable. Runs of at least 32 cases must also pass a topology-diversity gate.
+
+## 13. Measurement edge cases
+
+Wall-clock observations are not deterministic outputs. Enabling metrics adds
+monotonic-clock reads and a queue-depth update under locks that already exist,
+so it can perturb the scheduling and latency it observes. This is acceptable
+only because scenario-keyed RNG, stable block leaves, and fixed-tree reduction
+make the numerical result independent of that schedule. Tests compare metrics
+on and off bit-for-bit.
+
+Recovered blocks have no computation or result-install latency in the current
+process. Encoding that fact as zero keeps samples indexed by stable `block_id`;
+percentile summaries must filter zeros rather than treating recovery as an
+instantaneous operation. An entirely recovered run therefore emits `null`
+latency percentiles, zero queue peaks, and no worker records—not misleading
+zero-latency percentiles. If a monotonic clock cannot distinguish the beginning
+and end of a real operation, the runtime records one nanosecond to preserve the
+zero-sentinel distinction.
+
+Queue peaks are sampled inside the queue's existing mutex and cannot exceed the
+resolved capacity. They are high-water marks, not a backlog time series: a peak
+of one does not say how long the queue stayed occupied. Per-worker fields are
+written only by their owning worker and read after joins; block fields are
+written once by the worker assigned that stable block ID.
+
+Durable file counters name only newly and fully installed artifacts. Stage
+timers may include a successful write or sync from an attempt that later fails,
+whereas file counts and bytes advance after the full installation protocol.
+Consequently, stage time must not be used as evidence that a manifest committed.
+
+The caller owns `RuntimeMetrics`. If it is passed to `DurableRunStore::open`, it
+must outlive the store. Reusing an object is supported because each top-level
+run resets it. The same object must not be shared by overlapping runs or stores.
+Metrics are intentionally absent from hashes and durable records;
+however, adding their implementation changes the runtime source digest and thus
+the build fingerprint, so an R3 store still requires its R3-tagged binary.
+Additive duration and byte totals saturate at `UINT64_MAX`; wrapping to a small
+and plausible-looking value would be more dangerous than an explicit ceiling.

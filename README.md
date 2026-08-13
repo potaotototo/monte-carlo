@@ -1,6 +1,6 @@
 # Fault-Tolerant Parallel Monte Carlo Runtime
 
-This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime: a validated GBM pricer, deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, and replayable process-crash harness.
+This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime plus the first R4 observability slice: a validated GBM pricer, deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, replayable process-crash harness, and opt-in runtime/persistence metrics.
 
 ## What works now
 
@@ -27,6 +27,7 @@ This repository implements the project described in the supplied technical plan 
 - Exactly-once block contribution, terminal persisted determinism failures, storage preflight, and exclusive run-directory ownership.
 - Nine named result/manifest crash points exercised through real child-process termination.
 - Immutable SHA-256-protected replay-schema-v2 descriptors, watchdog-bounded seeded crash matrices, and descriptor-driven trace reproduction.
+- Opt-in monotonic runtime metrics for workers, bounded queues, coordinator work, reduction, and durable write stages without changing deterministic identities.
 - JSON output containing the estimate, standard error, 95% confidence interval, throughput, and analytic error where applicable.
 
 R3 validates application-level process crashes at every R2 result/manifest persistence boundary. It does not emulate machine power loss, torn device writes, or filesystem/kernel faults; the durability claim remains scoped to tested local POSIX filesystems honoring the documented flush protocol.
@@ -82,6 +83,11 @@ If `--checkpoint-blocks` is omitted (or set to `0`), the runtime chooses at leas
 
 Use `./build/run_simulation --help` for every option.
 
+Add `--metrics` to emit p50/p95/p99 block and persistence latencies, queue peaks,
+per-worker counters, coordinator timings, and durable write-stage totals. Metrics
+are diagnostic, caller-local data; they are not persisted or included in any
+deterministic identity.
+
 Capture a repeatable scaling baseline as CSV:
 
 ```sh
@@ -118,6 +124,7 @@ src/rng/          Philox and inverse-normal implementation
 src/models/       GBM path and payoff evaluation
 src/aggregation/  Welford updates and pairwise merge
 src/runtime/      scheduler/worker/coordinator execution path
+src/metrics.cpp   opt-in R4 latency summaries and reset contract
 src/failure_injection.cpp R3 hook tracing and replay descriptors
 src/run_store.cpp durable file installation and recovery
 src/persistence_codec.cpp canonical R2 binary formats
@@ -135,11 +142,12 @@ docs/             phased implementation notes
 | R1.5 | Frozen hashes/result validation and pre-persistence hardening | Complete |
 | R2 | Durable block results, atomic manifests, and restart recovery | Complete |
 | R3 | Deterministic crash injection and replay descriptors | Complete |
-| R4 | Synchronization, coordinator, and persistence benchmarks | Planned |
+| R4 | Synchronization, coordinator, and persistence benchmarks | Phase 1 complete |
 | R5 | Heston or another advanced risk/model extension | Planned |
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the phased handoff and acceptance evidence.
 The durable file, commit, and recovery contract is specified in [docs/R2_DURABLE_RECOVERY.md](docs/R2_DURABLE_RECOVERY.md).
 The crash-point, descriptor, matrix, and replay contract is specified in [docs/R3_FAILURE_INJECTION.md](docs/R3_FAILURE_INJECTION.md).
+The opt-in measurement contract and deferred R4 work are specified in [docs/R4_METRICS.md](docs/R4_METRICS.md).
 The first measured R1.5 scaling snapshot is in [docs/R1_5_BASELINE.csv](docs/R1_5_BASELINE.csv).
 Known numerical, protocol, resource, and recovery edge cases—including the rationale for a 53-bit binary64 uniform—are tracked in [docs/EDGE_CASES_AND_RELEASE_GATES.md](docs/EDGE_CASES_AND_RELEASE_GATES.md).

@@ -16,6 +16,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace {
 
@@ -49,7 +50,33 @@ void print_help() {
         << "  --volatility X      annualized volatility\n"
         << "  --maturity X        maturity in years\n"
         << "  --antithetic        aggregate antithetic pair-means\n"
+        << "  --metrics           emit opt-in R4 runtime and durable-I/O metrics\n"
         << "  --help              show this message\n";
+}
+
+void print_optional_ns(const std::optional<std::uint64_t>& value) {
+    if (value.has_value()) {
+        std::cout << *value;
+    } else {
+        std::cout << "null";
+    }
+}
+
+void print_latency_summary(
+    std::string_view name,
+    const std::vector<std::uint64_t>& samples,
+    bool trailing_comma) {
+    std::cout << "    \"" << name << "\": {\"p50\": ";
+    print_optional_ns(mc::latency_percentile_ns(samples, 0.50));
+    std::cout << ", \"p95\": ";
+    print_optional_ns(mc::latency_percentile_ns(samples, 0.95));
+    std::cout << ", \"p99\": ";
+    print_optional_ns(mc::latency_percentile_ns(samples, 0.99));
+    std::cout << '}';
+    if (trailing_comma) {
+        std::cout << ',';
+    }
+    std::cout << '\n';
 }
 
 }  // namespace
@@ -61,6 +88,7 @@ int main(int argc, char** argv) {
         mc::RunStoreConfig store_config;
         bool durable = false;
         bool store_policy_set = false;
+        bool metrics_enabled = false;
         config.worker_count = std::max(1U, std::thread::hardware_concurrency());
 
         for (int index = 1; index < argc; ++index) {
@@ -71,6 +99,8 @@ int main(int argc, char** argv) {
             }
             if (argument == "--antithetic") {
                 spec.antithetic = true;
+            } else if (argument == "--metrics") {
+                metrics_enabled = true;
             } else if (argument == "--scenarios") {
                 spec.total_scenarios =
                     mc::parse_u64(require_value(argc, argv, index), "scenarios");
@@ -152,13 +182,16 @@ int main(int argc, char** argv) {
 
         const auto started = std::chrono::steady_clock::now();
         std::optional<mc::DurableRunResult> durable_result;
+        mc::RuntimeMetrics runtime_metrics;
+        mc::RuntimeMetrics* const metrics =
+            metrics_enabled ? &runtime_metrics : nullptr;
         const mc::RunResult result = [&] {
             if (durable) {
                 durable_result =
-                    mc::run_parallel_durable(spec, config, store_config);
+                    mc::run_parallel_durable(spec, config, store_config, metrics);
                 return durable_result->run_result;
             }
-            return mc::run_parallel(spec, config);
+            return mc::run_parallel(spec, config, metrics);
         }();
         const auto stopped = std::chrono::steady_clock::now();
         const double seconds =
@@ -243,6 +276,71 @@ int main(int argc, char** argv) {
                 spec.spot, spec.strike, spec.rate, spec.volatility, spec.maturity);
             std::cout << ",\n  \"black_scholes_price\": " << analytic
                       << ",\n  \"analytic_error\": " << result.aggregate.mean - analytic;
+        }
+        if (metrics_enabled) {
+            std::cout << ",\n  \"metrics\": {\n"
+                      << "    \"total_elapsed_ns\": "
+                      << runtime_metrics.total_elapsed_ns << ",\n"
+                      << "    \"durable_open_ns\": "
+                      << runtime_metrics.durable_open_ns << ",\n"
+                      << "    \"scheduler_assignment_wait_ns\": "
+                      << runtime_metrics.scheduler_assignment_wait_ns << ",\n"
+                      << "    \"coordinator_completion_wait_ns\": "
+                      << runtime_metrics.coordinator_completion_wait_ns << ",\n"
+                      << "    \"coordinator_consume_ns\": "
+                      << runtime_metrics.coordinator_consume_ns << ",\n"
+                      << "    \"fixed_tree_reduce_ns\": "
+                      << runtime_metrics.fixed_tree_reduce_ns << ",\n"
+                      << "    \"max_assignment_queue_depth\": "
+                      << runtime_metrics.max_assignment_queue_depth << ",\n"
+                      << "    \"max_completion_queue_depth\": "
+                      << runtime_metrics.max_completion_queue_depth << ",\n";
+            print_latency_summary("block_compute_ns",
+                                  runtime_metrics.block_compute_ns, true);
+            print_latency_summary("result_persist_ns",
+                                  runtime_metrics.result_persist_ns, true);
+            print_latency_summary("checkpoint_ns",
+                                  runtime_metrics.checkpoint_ns, true);
+            std::cout << "    \"durable_io\": {\n"
+                      << "      \"metadata_files_installed\": "
+                      << runtime_metrics.durable_io.metadata_files_installed
+                      << ",\n      \"result_files_installed\": "
+                      << runtime_metrics.durable_io.result_files_installed
+                      << ",\n      \"manifest_files_installed\": "
+                      << runtime_metrics.durable_io.manifest_files_installed
+                      << ",\n      \"bytes_written\": "
+                      << runtime_metrics.durable_io.bytes_written
+                      << ",\n      \"write_ns\": "
+                      << runtime_metrics.durable_io.write_ns
+                      << ",\n      \"file_fsync_ns\": "
+                      << runtime_metrics.durable_io.file_fsync_ns
+                      << ",\n      \"rename_ns\": "
+                      << runtime_metrics.durable_io.rename_ns
+                      << ",\n      \"directory_fsync_ns\": "
+                      << runtime_metrics.durable_io.directory_fsync_ns
+                      << "\n    },\n"
+                      << "    \"workers\": [";
+            for (std::size_t index = 0;
+                 index < runtime_metrics.workers.size(); ++index) {
+                if (index != 0U) {
+                    std::cout << ',';
+                }
+                const mc::WorkerMetrics& worker = runtime_metrics.workers[index];
+                std::cout << "\n      {\"worker\": " << index
+                          << ", \"blocks_completed\": "
+                          << worker.blocks_completed
+                          << ", \"scenarios_completed\": "
+                          << worker.scenarios_completed
+                          << ", \"assignment_wait_ns\": "
+                          << worker.assignment_wait_ns
+                          << ", \"compute_ns\": " << worker.compute_ns
+                          << ", \"completion_queue_wait_ns\": "
+                          << worker.completion_queue_wait_ns << '}';
+            }
+            if (!runtime_metrics.workers.empty()) {
+                std::cout << "\n    ";
+            }
+            std::cout << "]\n  }";
         }
         std::cout << "\n}\n";
         return 0;

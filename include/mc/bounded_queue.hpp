@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <condition_variable>
 #include <cstddef>
 #include <deque>
@@ -12,7 +13,9 @@ namespace mc {
 template <typename T>
 class BoundedQueue {
 public:
-    explicit BoundedQueue(std::size_t capacity) : capacity_(capacity) {
+    explicit BoundedQueue(std::size_t capacity,
+                          std::size_t* max_observed_depth = nullptr)
+        : capacity_(capacity), max_observed_depth_(max_observed_depth) {
         if (capacity_ == 0) {
             throw std::invalid_argument("bounded queue capacity must be positive");
         }
@@ -28,6 +31,10 @@ public:
             return false;
         }
         queue_.push_back(std::move(item));
+        if (max_observed_depth_ != nullptr) {
+            *max_observed_depth_ =
+                std::max(*max_observed_depth_, queue_.size());
+        }
         not_empty_.notify_one();
         return true;
     }
@@ -57,8 +64,8 @@ private:
     std::condition_variable not_empty_;
     std::deque<T> queue_;
     std::size_t capacity_;
+    std::size_t* max_observed_depth_;
     bool closed_ = false;
 };
 
 }  // namespace mc
-

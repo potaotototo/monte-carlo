@@ -10,6 +10,7 @@
 #include <bit>
 #include <cerrno>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -61,6 +62,22 @@ struct DurableWriteContext {
     DurableArtifactKind kind = DurableArtifactKind::Metadata;
     FailureContext failure;
 };
+
+using MetricsClock = std::chrono::steady_clock;
+
+std::uint64_t metrics_elapsed_ns(MetricsClock::time_point started) noexcept {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        MetricsClock::now() - started).count();
+    // Zero is reserved for a missing sample. A clock whose resolution is
+    // coarser than the measured operation records the minimum observable unit.
+    return elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 1U;
+}
+
+void add_metric(std::uint64_t& total, std::uint64_t value) noexcept {
+    total = value > std::numeric_limits<std::uint64_t>::max() - total
+                ? std::numeric_limits<std::uint64_t>::max()
+                : total + value;
+}
 
 void hit_write_failure(FailureInjector* injector,
                        const DurableWriteContext& context,
@@ -570,6 +587,7 @@ void atomic_write(const RunStoreConfig& config,
                   std::uint64_t& current_bytes,
                   std::uint64_t& current_files,
                   FailureInjector* failure_injector,
+                  RuntimeMetrics* metrics,
                   const DurableWriteContext& write_context) {
     if (std::filesystem::exists(final_path)) {
         const std::vector<std::uint8_t> existing =
@@ -596,12 +614,28 @@ void atomic_write(const RunStoreConfig& config,
     }
 
     try {
+        MetricsClock::time_point write_started{};
+        if (metrics != nullptr) {
+            write_started = MetricsClock::now();
+        }
         write_all(descriptor, bytes, temporary_path);
+        if (metrics != nullptr) {
+            add_metric(metrics->durable_io.write_ns,
+                       metrics_elapsed_ns(write_started));
+        }
         hit_write_failure(failure_injector, write_context,
                           FailurePoint::ResultBeforeFileFsync,
                           FailurePoint::ManifestBeforeFileFsync);
+        MetricsClock::time_point file_fsync_started{};
+        if (metrics != nullptr) {
+            file_fsync_started = MetricsClock::now();
+        }
         if (::fsync(descriptor) != 0) {
             throw system_error("cannot fsync durable temporary file", temporary_path);
+        }
+        if (metrics != nullptr) {
+            add_metric(metrics->durable_io.file_fsync_ns,
+                       metrics_elapsed_ns(file_fsync_started));
         }
         hit_write_failure(failure_injector, write_context,
                           FailurePoint::ResultAfterFileFsync,
@@ -614,15 +648,38 @@ void atomic_write(const RunStoreConfig& config,
         hit_write_failure(failure_injector, write_context,
                           FailurePoint::ResultBeforeRename,
                           FailurePoint::ManifestBeforeRename);
+        MetricsClock::time_point rename_started{};
+        if (metrics != nullptr) {
+            rename_started = MetricsClock::now();
+        }
         if (::rename(temporary_path.c_str(), final_path.c_str()) != 0) {
             throw system_error("cannot atomically install durable file", final_path);
+        }
+        if (metrics != nullptr) {
+            add_metric(metrics->durable_io.rename_ns,
+                       metrics_elapsed_ns(rename_started));
         }
         hit_write_failure(failure_injector, write_context,
                           FailurePoint::ResultAfterRename,
                           FailurePoint::ManifestAfterRename);
+        MetricsClock::time_point directory_fsync_started{};
+        if (metrics != nullptr) {
+            directory_fsync_started = MetricsClock::now();
+        }
         sync_directory(final_path.parent_path());
+        if (metrics != nullptr) {
+            add_metric(metrics->durable_io.directory_fsync_ns,
+                       metrics_elapsed_ns(directory_fsync_started));
+        }
         if (final_path.parent_path() != temporary_path.parent_path()) {
+            if (metrics != nullptr) {
+                directory_fsync_started = MetricsClock::now();
+            }
             sync_directory(temporary_path.parent_path());
+            if (metrics != nullptr) {
+                add_metric(metrics->durable_io.directory_fsync_ns,
+                           metrics_elapsed_ns(directory_fsync_started));
+            }
         }
     } catch (...) {
         if (descriptor >= 0) {
@@ -635,6 +692,21 @@ void atomic_write(const RunStoreConfig& config,
 
     current_bytes += static_cast<std::uint64_t>(bytes.size());
     ++current_files;
+    if (metrics != nullptr) {
+        add_metric(metrics->durable_io.bytes_written,
+                   static_cast<std::uint64_t>(bytes.size()));
+        switch (write_context.kind) {
+        case DurableArtifactKind::Metadata:
+            ++metrics->durable_io.metadata_files_installed;
+            break;
+        case DurableArtifactKind::BlockResult:
+            ++metrics->durable_io.result_files_installed;
+            break;
+        case DurableArtifactKind::Manifest:
+            ++metrics->durable_io.manifest_files_installed;
+            break;
+        }
+    }
 }
 
 bool aggregates_equal(const AggregateStats& left, const AggregateStats& right) {
@@ -914,7 +986,8 @@ DurableRunStore::DurableRunStore(
     std::uint64_t current_storage_bytes,
     std::uint64_t current_storage_files,
     int lock_descriptor,
-    std::unique_ptr<FailureInjector> failure_injector)
+    std::unique_ptr<FailureInjector> failure_injector,
+    RuntimeMetrics* metrics)
     : spec_(std::move(spec)),
       engine_config_(std::move(engine_config)),
       store_config_(std::move(store_config)),
@@ -924,7 +997,8 @@ DurableRunStore::DurableRunStore(
       current_storage_bytes_(current_storage_bytes),
       current_storage_files_(current_storage_files),
       lock_descriptor_(lock_descriptor),
-      failure_injector_(std::move(failure_injector)) {}
+      failure_injector_(std::move(failure_injector)),
+      metrics_(metrics) {}
 
 DurableRunStore::~DurableRunStore() {
     if (lock_descriptor_ >= 0) {
@@ -943,7 +1017,8 @@ DurableRunStore::DurableRunStore(DurableRunStore&& other) noexcept
       current_storage_bytes_(other.current_storage_bytes_),
       current_storage_files_(other.current_storage_files_),
       lock_descriptor_(std::exchange(other.lock_descriptor_, -1)),
-      failure_injector_(std::move(other.failure_injector_)) {}
+      failure_injector_(std::move(other.failure_injector_)),
+      metrics_(std::exchange(other.metrics_, nullptr)) {}
 
 DurableRunStore& DurableRunStore::operator=(DurableRunStore&& other) noexcept {
     if (this == &other) {
@@ -963,15 +1038,23 @@ DurableRunStore& DurableRunStore::operator=(DurableRunStore&& other) noexcept {
     current_storage_files_ = other.current_storage_files_;
     lock_descriptor_ = std::exchange(other.lock_descriptor_, -1);
     failure_injector_ = std::move(other.failure_injector_);
+    metrics_ = std::exchange(other.metrics_, nullptr);
     return *this;
 }
 
 DurableRunStore DurableRunStore::open(
     const RunSpec& spec,
     const EngineConfig& engine_config,
-    const RunStoreConfig& store_config) {
+    const RunStoreConfig& store_config,
+    RuntimeMetrics* metrics) {
+    if (metrics != nullptr) {
+        metrics->reset(0U);
+    }
     store_config.validate();
     const RunMetadata expected = expected_metadata(spec, engine_config);
+    if (metrics != nullptr) {
+        metrics->reset(static_cast<std::size_t>(expected.block_count));
+    }
     const RunStoreConfig resolved_store_config =
         resolve_checkpoint_cadence(store_config, expected.block_count);
     const RunStoreConfig& config = resolved_store_config;
@@ -1035,6 +1118,7 @@ DurableRunStore DurableRunStore::open(
         completion_preflight_done = true;
         atomic_write(config, metadata_path, metadata_bytes,
                      current_bytes, current_files, failure_injector.get(),
+                     metrics,
                      DurableWriteContext{DurableArtifactKind::Metadata, {}});
     }
 
@@ -1076,6 +1160,7 @@ DurableRunStore DurableRunStore::open(
             config, manifest_path_for(config.run_directory, 0U),
             encode_manifest(initial), current_bytes, current_files,
             failure_injector.get(),
+            metrics,
             DurableWriteContext{
                 DurableArtifactKind::Manifest,
                 FailureContext{initial.run_incarnation, kNoFailureContext,
@@ -1143,6 +1228,7 @@ DurableRunStore DurableRunStore::open(
                                            recovery.manifest_sequence),
                          encode_manifest(recovery_manifest), current_bytes,
                          current_files, failure_injector.get(),
+                         metrics,
                          DurableWriteContext{
                              DurableArtifactKind::Manifest,
                              FailureContext{
@@ -1162,7 +1248,7 @@ DurableRunStore DurableRunStore::open(
     const int lock_descriptor = run_lock.release();
     return DurableRunStore(spec, engine_config, resolved_store_config, metadata,
                            std::move(recovery), current_bytes, current_files,
-                           lock_descriptor, std::move(failure_injector));
+                           lock_descriptor, std::move(failure_injector), metrics);
 }
 
 const RunMetadata& DurableRunStore::metadata() const noexcept {
@@ -1235,6 +1321,7 @@ void DurableRunStore::record_result(const BlockResult& result) {
     atomic_write(store_config_, block_result_path(result.block), bytes,
                  current_storage_bytes_, current_storage_files_,
                  failure_injector_.get(),
+                 metrics_,
                  DurableWriteContext{
                      DurableArtifactKind::BlockResult,
                      FailureContext{result.block.run_incarnation,
@@ -1324,6 +1411,7 @@ void DurableRunStore::checkpoint(
     atomic_write(store_config_, manifest_path(next_sequence), bytes,
                  current_storage_bytes_, current_storage_files_,
                  failure_injector_.get(),
+                 metrics_,
                  DurableWriteContext{
                      DurableArtifactKind::Manifest,
                      FailureContext{manifest.run_incarnation,

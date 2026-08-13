@@ -2,6 +2,7 @@
 
 #include "mc/aggregate.hpp"
 #include "mc/hash.hpp"
+#include "mc/metrics.hpp"
 #include "mc/run_spec.hpp"
 
 #include <cstddef>
@@ -66,6 +67,8 @@ AggregateStats compute_block(const RunSpec& spec, const ScenarioBlock& block);
 // changes the tree shape.
 AggregateStats reduce_block_results(const std::vector<AggregateStats>& leaves);
 
-RunResult run_parallel(const RunSpec& spec, const EngineConfig& config);
+RunResult run_parallel(const RunSpec& spec,
+                       const EngineConfig& config,
+                       RuntimeMetrics* metrics = nullptr);
 
 }  // namespace mc

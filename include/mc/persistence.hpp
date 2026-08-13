@@ -130,7 +130,8 @@ class DurableRunStore {
 public:
     static DurableRunStore open(const RunSpec& spec,
                                 const EngineConfig& engine_config,
-                                const RunStoreConfig& store_config);
+                                const RunStoreConfig& store_config,
+                                RuntimeMetrics* metrics = nullptr);
 
     DurableRunStore(const DurableRunStore&) = delete;
     DurableRunStore& operator=(const DurableRunStore&) = delete;
@@ -169,7 +170,8 @@ private:
                     std::uint64_t current_storage_bytes,
                     std::uint64_t current_storage_files,
                     int lock_descriptor,
-                    std::unique_ptr<FailureInjector> failure_injector);
+                    std::unique_ptr<FailureInjector> failure_injector,
+                    RuntimeMetrics* metrics);
 
     RunSpec spec_;
     EngineConfig engine_config_;
@@ -181,6 +183,7 @@ private:
     std::uint64_t current_storage_files_ = 0;
     int lock_descriptor_ = -1;
     std::unique_ptr<FailureInjector> failure_injector_;
+    RuntimeMetrics* metrics_ = nullptr;
 };
 
 struct DurableRunResult {
@@ -197,6 +200,7 @@ struct DurableRunResult {
 
 DurableRunResult run_parallel_durable(const RunSpec& spec,
                                       const EngineConfig& engine_config,
-                                      const RunStoreConfig& store_config);
+                                      const RunStoreConfig& store_config,
+                                      RuntimeMetrics* metrics = nullptr);
 
 }  // namespace mc

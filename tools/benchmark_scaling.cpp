@@ -33,6 +33,16 @@ double median(std::vector<double> values) {
     return values[middle];
 }
 
+double required_metric(
+    const std::optional<std::uint64_t>& value,
+    std::string_view name) {
+    if (!value.has_value()) {
+        throw std::runtime_error("benchmark produced no samples for " +
+                                 std::string(name));
+    }
+    return static_cast<double>(*value);
+}
+
 std::vector<std::size_t> worker_counts(std::size_t maximum) {
     std::vector<std::size_t> values{1};
     for (std::size_t candidate : {2U, 4U, 8U}) {
@@ -108,7 +118,10 @@ int main(int argc, char** argv) {
         static_cast<void>(mc::run_parallel(warmup_spec, warmup_config));
 
         std::cout << "block_size,workers_requested,workers_used,median_seconds,scenarios_per_second,"
-                     "speedup,parallel_efficiency,price,standard_error\n";
+                     "speedup,parallel_efficiency,price,standard_error,block_p50_ns,block_p95_ns,"
+                     "block_p99_ns,assignment_queue_peak,completion_queue_peak,"
+                     "scheduler_assignment_wait_ns,coordinator_completion_wait_ns,"
+                     "coordinator_consume_ns\n";
         std::cout << std::fixed << std::setprecision(9);
         for (const std::uint64_t block_size : {512U, 2'048U, 8'192U, 32'768U}) {
             double single_worker_rate = 0.0;
@@ -118,14 +131,50 @@ int main(int argc, char** argv) {
                 config.block_size = block_size;
 
                 std::vector<double> durations;
+                std::vector<double> block_p50;
+                std::vector<double> block_p95;
+                std::vector<double> block_p99;
+                std::vector<double> assignment_queue_peak;
+                std::vector<double> completion_queue_peak;
+                std::vector<double> scheduler_assignment_wait;
+                std::vector<double> coordinator_completion_wait;
+                std::vector<double> coordinator_consume;
                 durations.reserve(repeats);
+                block_p50.reserve(repeats);
+                block_p95.reserve(repeats);
+                block_p99.reserve(repeats);
+                assignment_queue_peak.reserve(repeats);
+                completion_queue_peak.reserve(repeats);
+                scheduler_assignment_wait.reserve(repeats);
+                coordinator_completion_wait.reserve(repeats);
+                coordinator_consume.reserve(repeats);
                 mc::RunResult last_result;
                 for (std::size_t repeat = 0; repeat < repeats; ++repeat) {
+                    mc::RuntimeMetrics metrics;
                     const auto started = std::chrono::steady_clock::now();
-                    last_result = mc::run_parallel(spec, config);
+                    last_result = mc::run_parallel(spec, config, &metrics);
                     const auto stopped = std::chrono::steady_clock::now();
                     durations.push_back(
                         std::chrono::duration<double>(stopped - started).count());
+                    block_p50.push_back(required_metric(
+                        mc::latency_percentile_ns(metrics.block_compute_ns, 0.50),
+                        "block p50"));
+                    block_p95.push_back(required_metric(
+                        mc::latency_percentile_ns(metrics.block_compute_ns, 0.95),
+                        "block p95"));
+                    block_p99.push_back(required_metric(
+                        mc::latency_percentile_ns(metrics.block_compute_ns, 0.99),
+                        "block p99"));
+                    assignment_queue_peak.push_back(static_cast<double>(
+                        metrics.max_assignment_queue_depth));
+                    completion_queue_peak.push_back(static_cast<double>(
+                        metrics.max_completion_queue_depth));
+                    scheduler_assignment_wait.push_back(static_cast<double>(
+                        metrics.scheduler_assignment_wait_ns));
+                    coordinator_completion_wait.push_back(static_cast<double>(
+                        metrics.coordinator_completion_wait_ns));
+                    coordinator_consume.push_back(static_cast<double>(
+                        metrics.coordinator_consume_ns));
                 }
                 const double seconds = median(std::move(durations));
                 const double rate =
@@ -134,7 +183,8 @@ int main(int argc, char** argv) {
                     single_worker_rate = rate;
                 }
                 const double speedup = rate / single_worker_rate;
-                const double efficiency = speedup / static_cast<double>(workers);
+                const double efficiency =
+                    speedup / static_cast<double>(last_result.workers_used);
                 const std::optional<double> standard_error =
                     last_result.aggregate.standard_error();
                 if (!standard_error.has_value()) {
@@ -145,7 +195,15 @@ int main(int argc, char** argv) {
                           << last_result.workers_used << ',' << seconds << ','
                           << rate << ',' << speedup << ',' << efficiency << ','
                           << last_result.aggregate.mean << ','
-                          << *standard_error << '\n';
+                          << *standard_error << ','
+                          << median(std::move(block_p50)) << ','
+                          << median(std::move(block_p95)) << ','
+                          << median(std::move(block_p99)) << ','
+                          << median(std::move(assignment_queue_peak)) << ','
+                          << median(std::move(completion_queue_peak)) << ','
+                          << median(std::move(scheduler_assignment_wait)) << ','
+                          << median(std::move(coordinator_completion_wait)) << ','
+                          << median(std::move(coordinator_consume)) << '\n';
             }
         }
         return 0;

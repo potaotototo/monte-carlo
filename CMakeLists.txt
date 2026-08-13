@@ -13,6 +13,7 @@ set(MC_RUNTIME_SOURCES
     src/failure_injection.cpp
     src/hash.cpp
     src/identity.cpp
+    src/metrics.cpp
     src/models/gbm.cpp
     src/parse.cpp
     src/persistence_codec.cpp

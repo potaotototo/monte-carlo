@@ -8,9 +8,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -19,6 +21,39 @@
 
 namespace mc {
 namespace {
+
+using MetricsClock = std::chrono::steady_clock;
+
+std::uint64_t elapsed_ns(MetricsClock::time_point started) noexcept {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        MetricsClock::now() - started).count();
+    // Zero is reserved for a missing sample. A clock whose resolution is
+    // coarser than the measured operation records the minimum observable unit.
+    return elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 1U;
+}
+
+void add_metric(std::uint64_t& total, std::uint64_t value) noexcept {
+    total = value > std::numeric_limits<std::uint64_t>::max() - total
+                ? std::numeric_limits<std::uint64_t>::max()
+                : total + value;
+}
+
+class TotalMetricsTimer {
+public:
+    TotalMetricsTimer(RuntimeMetrics* metrics,
+                      MetricsClock::time_point started) noexcept
+        : metrics_(metrics), started_(started) {}
+
+    ~TotalMetricsTimer() {
+        if (metrics_ != nullptr) {
+            metrics_->total_elapsed_ns = elapsed_ns(started_);
+        }
+    }
+
+private:
+    RuntimeMetrics* metrics_;
+    MetricsClock::time_point started_;
+};
 
 AggregateStats compute_block_with_kernel(const GbmKernel& kernel,
                                          const ScenarioBlock& block) {
@@ -58,7 +93,8 @@ std::size_t execute_missing_blocks(
     const Sha256Digest& spec_hash,
     const Sha256Digest& layout_hash,
     const Sha256Digest& build_fingerprint,
-    const std::function<void(BlockResult&&)>& consume_result) {
+    const std::function<void(BlockResult&&)>& consume_result,
+    RuntimeMetrics* metrics) {
     if (already_received.size() != blocks.size()) {
         throw std::invalid_argument("received bitmap does not match block universe");
     }
@@ -85,8 +121,12 @@ std::size_t execute_missing_blocks(
             ? std::max<std::size_t>(1, actual_worker_count * 2U)
             : config.completion_queue_capacity;
 
-    BoundedQueue<ScenarioBlock> assignments(assignment_capacity);
-    BoundedQueue<BlockResult> completions(completion_capacity);
+    BoundedQueue<ScenarioBlock> assignments(
+        assignment_capacity,
+        metrics == nullptr ? nullptr : &metrics->max_assignment_queue_depth);
+    BoundedQueue<BlockResult> completions(
+        completion_capacity,
+        metrics == nullptr ? nullptr : &metrics->max_completion_queue_depth);
     std::mutex error_mutex;
     std::exception_ptr first_error;
 
@@ -104,6 +144,9 @@ std::size_t execute_missing_blocks(
     std::atomic<std::size_t> workers_remaining{actual_worker_count};
     std::vector<std::thread> workers;
     workers.reserve(actual_worker_count);
+    if (metrics != nullptr) {
+        metrics->workers.assign(actual_worker_count, {});
+    }
     try {
         for (std::size_t worker_index = 0;
              worker_index < actual_worker_count;
@@ -112,7 +155,24 @@ std::size_t execute_missing_blocks(
                 try {
                     const GbmKernel kernel(spec);
                     ScenarioBlock block;
-                    while (assignments.pop(block)) {
+                    for (;;) {
+                        MetricsClock::time_point wait_started{};
+                        if (metrics != nullptr) {
+                            wait_started = MetricsClock::now();
+                        }
+                        const bool assigned = assignments.pop(block);
+                        if (metrics != nullptr) {
+                            add_metric(
+                                metrics->workers[worker_index].assignment_wait_ns,
+                                elapsed_ns(wait_started));
+                        }
+                        if (!assigned) {
+                            break;
+                        }
+                        MetricsClock::time_point compute_started{};
+                        if (metrics != nullptr) {
+                            compute_started = MetricsClock::now();
+                        }
                         BlockResult result;
                         result.block = block;
                         result.aggregate = compute_block_with_kernel(kernel, block);
@@ -125,7 +185,32 @@ std::size_t execute_missing_blocks(
                         result.stats_schema_version = spec.stats_schema_version;
                         result.worker_id =
                             static_cast<std::uint64_t>(worker_index);
-                        if (!completions.push(std::move(result))) {
+                        if (metrics != nullptr) {
+                            const std::uint64_t compute_ns =
+                                elapsed_ns(compute_started);
+                            WorkerMetrics& worker =
+                                metrics->workers[worker_index];
+                            add_metric(worker.compute_ns, compute_ns);
+                            ++worker.blocks_completed;
+                            worker.scenarios_completed +=
+                                block.end_scenario - block.start_scenario;
+                            metrics->block_compute_ns[
+                                static_cast<std::size_t>(block.block_id)] =
+                                compute_ns;
+                        }
+                        MetricsClock::time_point submit_started{};
+                        if (metrics != nullptr) {
+                            submit_started = MetricsClock::now();
+                        }
+                        const bool submitted =
+                            completions.push(std::move(result));
+                        if (metrics != nullptr) {
+                            add_metric(
+                                metrics->workers[worker_index]
+                                    .completion_queue_wait_ns,
+                                elapsed_ns(submit_started));
+                        }
+                        if (!submitted) {
                             break;
                         }
                     }
@@ -152,7 +237,16 @@ std::size_t execute_missing_blocks(
         scheduler = std::thread([&] {
             try {
                 for (const std::size_t index : pending_indices) {
-                    if (!assignments.push(blocks[index])) {
+                    MetricsClock::time_point submit_started{};
+                    if (metrics != nullptr) {
+                        submit_started = MetricsClock::now();
+                    }
+                    const bool submitted = assignments.push(blocks[index]);
+                    if (metrics != nullptr) {
+                        add_metric(metrics->scheduler_assignment_wait_ns,
+                                   elapsed_ns(submit_started));
+                    }
+                    if (!submitted) {
                         break;
                     }
                 }
@@ -171,12 +265,36 @@ std::size_t execute_missing_blocks(
     }
 
     BlockResult completed;
-    while (completions.pop(completed)) {
+    for (;;) {
+        MetricsClock::time_point wait_started{};
+        if (metrics != nullptr) {
+            wait_started = MetricsClock::now();
+        }
+        const bool available = completions.pop(completed);
+        if (metrics != nullptr) {
+            add_metric(metrics->coordinator_completion_wait_ns,
+                       elapsed_ns(wait_started));
+        }
+        if (!available) {
+            break;
+        }
+        MetricsClock::time_point consume_started{};
+        if (metrics != nullptr) {
+            consume_started = MetricsClock::now();
+        }
         try {
             consume_result(std::move(completed));
         } catch (...) {
+            if (metrics != nullptr) {
+                add_metric(metrics->coordinator_consume_ns,
+                           elapsed_ns(consume_started));
+            }
             record_error(std::current_exception());
             break;
+        }
+        if (metrics != nullptr) {
+            add_metric(metrics->coordinator_consume_ns,
+                       elapsed_ns(consume_started));
         }
     }
 
@@ -286,8 +404,19 @@ AggregateStats reduce_block_results(const std::vector<AggregateStats>& leaves) {
     return level.front();
 }
 
-RunResult run_parallel(const RunSpec& spec, const EngineConfig& config) {
+RunResult run_parallel(const RunSpec& spec,
+                       const EngineConfig& config,
+                       RuntimeMetrics* metrics) {
+    MetricsClock::time_point total_started{};
+    if (metrics != nullptr) {
+        total_started = MetricsClock::now();
+        metrics->reset(0U);
+    }
+    const TotalMetricsTimer total_timer(metrics, total_started);
     const std::vector<ScenarioBlock> blocks = make_blocks(spec, config);
+    if (metrics != nullptr) {
+        metrics->reset(blocks.size());
+    }
     CoordinatorState coordinator = make_coordinator_state(spec, config, blocks);
     std::vector<AggregateStats> leaves(blocks.size());
     std::vector<bool> received(blocks.size(), false);
@@ -305,13 +434,22 @@ RunResult run_parallel(const RunSpec& spec, const EngineConfig& config) {
                 static_cast<std::size_t>(completed.block.block_id);
             leaves[leaf] = completed.aggregate;
             received[leaf] = true;
-        });
+        },
+        metrics);
     if (std::find(received.begin(), received.end(), false) != received.end()) {
         throw std::runtime_error("parallel run ended before every block completed");
     }
 
+    MetricsClock::time_point reduce_started{};
+    if (metrics != nullptr) {
+        reduce_started = MetricsClock::now();
+    }
+    const AggregateStats aggregate = reduce_block_results(leaves);
+    if (metrics != nullptr) {
+        metrics->fixed_tree_reduce_ns = elapsed_ns(reduce_started);
+    }
     return RunResult{
-        reduce_block_results(leaves),
+        aggregate,
         spec.total_scenarios,
         static_cast<std::uint64_t>(blocks.size()),
         actual_worker_count,
@@ -321,9 +459,23 @@ RunResult run_parallel(const RunSpec& spec, const EngineConfig& config) {
 DurableRunResult run_parallel_durable(
     const RunSpec& spec,
     const EngineConfig& engine_config,
-    const RunStoreConfig& store_config) {
-    DurableRunStore store =
-        DurableRunStore::open(spec, engine_config, store_config);
+    const RunStoreConfig& store_config,
+    RuntimeMetrics* metrics) {
+    MetricsClock::time_point total_started{};
+    if (metrics != nullptr) {
+        total_started = MetricsClock::now();
+        metrics->reset(0U);
+    }
+    const TotalMetricsTimer total_timer(metrics, total_started);
+    MetricsClock::time_point open_started{};
+    if (metrics != nullptr) {
+        open_started = MetricsClock::now();
+    }
+    DurableRunStore store = DurableRunStore::open(
+        spec, engine_config, store_config, metrics);
+    if (metrics != nullptr) {
+        metrics->durable_open_ns = elapsed_ns(open_started);
+    }
     const DurableRecoveryState& recovery = store.recovery_state();
     if (recovery.status == DurableRunStatus::Failed) {
         throw std::runtime_error(
@@ -391,7 +543,16 @@ DurableRunResult run_parallel_durable(
                         validation.reason);
                 }
 
+                MetricsClock::time_point persist_started{};
+                if (metrics != nullptr) {
+                    persist_started = MetricsClock::now();
+                }
                 store.record_result(completed);
+                if (metrics != nullptr) {
+                    metrics->result_persist_ns[static_cast<std::size_t>(
+                        completed.block.block_id)] =
+                        elapsed_ns(persist_started);
+                }
                 const Validation committed =
                     commit_result(completed, coordinator);
                 if (committed.status != ValidationStatus::Accepted) {
@@ -411,20 +572,44 @@ DurableRunResult run_parallel_durable(
                         store.config().checkpoint_interval_blocks &&
                     recovered_blocks + computed_blocks <
                         static_cast<std::uint64_t>(recovery.blocks.size())) {
+                    MetricsClock::time_point checkpoint_started{};
+                    if (metrics != nullptr) {
+                        checkpoint_started = MetricsClock::now();
+                    }
                     store.checkpoint(coordinator, leaves, received);
+                    if (metrics != nullptr) {
+                        metrics->checkpoint_ns.push_back(
+                            elapsed_ns(checkpoint_started));
+                    }
                     pending_since_checkpoint = 0U;
                 }
-            });
+            },
+            metrics);
         if (std::find(received.begin(), received.end(), false) !=
             received.end()) {
             throw std::runtime_error(
                 "durable run ended before every block completed");
         }
+        MetricsClock::time_point checkpoint_started{};
+        if (metrics != nullptr) {
+            checkpoint_started = MetricsClock::now();
+        }
         store.checkpoint(coordinator, leaves, received,
                          DurableRunStatus::Complete);
+        if (metrics != nullptr) {
+            metrics->checkpoint_ns.push_back(
+                elapsed_ns(checkpoint_started));
+        }
     }
 
+    MetricsClock::time_point reduce_started{};
+    if (metrics != nullptr) {
+        reduce_started = MetricsClock::now();
+    }
     const AggregateStats aggregate = reduce_block_results(leaves);
+    if (metrics != nullptr) {
+        metrics->fixed_tree_reduce_ns = elapsed_ns(reduce_started);
+    }
     return DurableRunResult{
         RunResult{aggregate,
                   spec.total_scenarios,
