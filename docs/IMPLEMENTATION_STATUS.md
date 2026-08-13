@@ -192,9 +192,10 @@ Post-implementation audit fixes and decisions:
 Local target evidence: single-thread throughput, recoverable throughput,
 coordinator active-time proxy, 10,000-scenario P99 commit latency, and
 10,000-block recovery-open time passed their R4 gates. Sparse checkpoint
-throughput loss remains provisional because the target-scale artifact contains
-one repetition; the repeated small sweep is supporting evidence, not a
-substitute for target-scale variance.
+throughput loss remains open: three independent target-scale sweeps produced a
+1.46% median but a -2.36% to 25.44% range, with an 84% swing in the non-durable
+baseline. The raw alternating-order rows are retained rather than treating the
+favorable median as a pass.
 The eight-worker efficiency capture reached about 50%, below the 60% target,
 although four-worker efficiency remained above 70%; that gate stays open rather
 than being waived. Exact commands, limitations, results, and CSV artifacts are

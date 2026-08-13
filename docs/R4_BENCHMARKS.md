@@ -133,7 +133,7 @@ The CSV snapshots were captured on 2026-08-14 on an Apple M1 MacBook Air with
 `-O3 -ffp-contract=off`, AC power, and low-power mode disabled. The APFS data
 volume had about 7.8 GiB free and was reported at 97% capacity. No CPU affinity,
 exclusive-host reservation, or hardware counter collection was available, so
-small differences and negative measured overhead are treated as noise.
+small differences and negative measured throughput loss are treated as noise.
 
 Captured artifacts:
 
@@ -143,7 +143,10 @@ Captured artifacts:
 - `R4_RECOVERY_10K_BASELINE.csv`: 10,000 committed-result recovery with
   1,000-scenario blocks;
 - `R4_DURABLE_TARGET_BASELINE.csv`: 100 million scenarios, 10,000 blocks of
-  10,000 scenarios, and target-scale cadences.
+  10,000 scenarios, and target-scale cadences;
+- `R4_CHECKPOINT_GATE_REPEATS.csv`: three independent target-scale cadence
+  sweeps captured from commit `fff2bc6`, preserving all six raw rows and the
+  alternated cadence order.
 
 ## Findings and decisions
 
@@ -176,6 +179,14 @@ Captured artifacts:
    was within noise of the final-only run, while immutable result installation
    remained the dominant durable cost.
 
+6. Do not close a performance gate from a favorable median when the host is
+   unstable. Three independent target-scale sweeps, ordered 6,000/10,000 then
+   10,000/6,000 then 6,000/10,000, measured checkpoint throughput losses of
+   1.459%, 25.445%, and -2.360%. The median is 1.459%, but the range crosses the
+   10% gate and the second capture's non-durable time rose from about 1.05s to
+   1.92s. The evidence therefore diagnoses uncontrolled host variability rather
+   than establishing a stable checkpoint cost.
+
 ## R4 target status on this host
 
 | Target | Evidence | Status |
@@ -185,7 +196,7 @@ Captured artifacts:
 | Recoverable ≥5M/s with checkpoints no more often than 1/s | 49.2M/s, cadence ≈1.22s | Pass |
 | Coordinator ≤25% of one core before 8 workers | default 2,048/auto row active-time proxy ≈6.9% | Pass by proxy |
 | P99 commit <50ms for 10,000-scenario blocks | 9.23ms at cadence 6,000 | Pass |
-| Checkpoint throughput loss <10% | cadence 6,000 versus final-only used one target-scale repetition; the repeated small sweep was <4% at the selected sparse cadence | Provisional; target-scale repetitions required |
+| Checkpoint throughput loss <10% | three target-scale losses: -2.36%, 1.46%, 25.44%; median 1.46%, but range crosses gate | Open; host capture unstable |
 | Recovery open <2s for 10,000 committed blocks | completed-open 0.56s at target scale | Pass |
 
 The eight-worker efficiency target is intentionally left open. The current M1
@@ -194,11 +205,10 @@ sustained builds and I/O, but those facts do not turn a measured miss into a
 pass. A later tuning phase should profile the metrics-off eight-worker path on
 an isolated host before changing the scheduler or claiming the gate.
 
-The checkpoint throughput-loss gate likewise remains open. The existing
-target-scale capture is useful exploratory evidence but cannot establish a
-median or run-to-run spread because it has `repeats=1`. Closing the gate requires
-at least three target-scale repetitions per sparse and final-only cadence,
-preferably by repeating the complete cadence sweep with the cadence order
-alternated between captures so order and thermal drift can be detected.
-The recorded one-repetition CSV remains unchanged evidence rather than being
-retrospectively promoted to a statistically supported pass.
+The checkpoint throughput-loss gate likewise remains open. Three independent
+target-scale repetitions now establish both a median and an observed spread,
+but one capture exceeds the gate by a large margin and the non-durable baseline
+varied by about 84%. A later capture needs an isolated, thermally stable host and
+the same alternating-order protocol. The original one-repetition CSV remains
+unchanged evidence; the six new raw rows are stored separately rather than
+rewriting history.
