@@ -1,0 +1,5 @@
+/build/
+/build-*/
+/runs/
+*.tmp
+*.dSYM/
