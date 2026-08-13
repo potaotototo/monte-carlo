@@ -1864,10 +1864,10 @@ void validation_rejects_split_antithetic_pairs() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    test_executable = std::filesystem::absolute(argv[0]);
     if (argc >= 2 && std::string_view(argv[1]) == "--r3-crash-child") {
         return run_r3_crash_child(argc, argv);
     }
+    test_executable = mc::tool::resolve_executable_path(argv[0]);
     const std::vector<std::pair<std::string, std::function<void()>>> tests = {
         {"philox_known_answer", philox_known_answer},
         {"counter_layout_v1", counter_layout_v1},

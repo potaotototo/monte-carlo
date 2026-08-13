@@ -114,11 +114,17 @@ reduction, and total elapsed time.
 
 `benchmark_scaling` pairs a metrics-disabled and metrics-enabled execution for
 every repetition, alternating their order. It reports both throughputs, the
-observed instrumentation overhead, median block/commit p50/p95/p99 latency,
+observed instrumentation throughput loss, median block/commit p50/p95/p99 latency,
 queue peaks, scheduler wait, coordinator wait, and coordinator-consumption
 columns. Parallel efficiency divides by the workers actually used, rather than
 workers requested, because a run with fewer blocks cannot activate surplus
 threads. Every pair is also checked for bitwise-identical final aggregates.
+
+`metrics_throughput_loss_percent` is
+`100 * (1 - metrics_rate / metrics_disabled_rate)`. It is deliberately named a
+throughput loss: if instrumentation doubles elapsed time, the loss is 50%, while
+elapsed-time overhead would be 100%. Negative values mean the observed run was
+faster and should normally be treated as measurement noise.
 
 Timing data is noisy and machine-specific. Use repeated runs, compare medians,
 pin workload/build/power conditions, and treat small differences as noise.

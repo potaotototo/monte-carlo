@@ -175,7 +175,13 @@ Post-implementation audit fixes and decisions:
   them as latency samples;
 - separated all recovery computation from genuinely duplicated work after a
   crash;
-- made every CSV row self-describing and quantified opt-in metrics overhead;
+- made every CSV row self-describing and named the measured throughput-loss
+  convention explicitly so it cannot be confused with elapsed-time overhead;
+- centralized canonical self-executable resolution for the persistence
+  benchmark, crash matrix, replay tool, and crash-spawning tests, including bare
+  invocations through `PATH`;
+- preflighted benchmark inputs before warmup/CSV output and made temporary-
+  workspace cleanup failures observable;
 - retained the deterministic tree, 2,048-scenario block default, and automatic
   queue sizing because alternatives did not show a stable end-to-end win;
 - raised the automatic full-manifest cadence floor from 64 to 1,024 blocks.
@@ -184,15 +190,19 @@ Post-implementation audit fixes and decisions:
   crash-recomputation window.
 
 Local target evidence: single-thread throughput, recoverable throughput,
-coordinator active-time proxy, 10,000-scenario P99 commit latency, sparse
-checkpoint overhead, and 10,000-block recovery-open time passed their R4 gates.
+coordinator active-time proxy, 10,000-scenario P99 commit latency, and
+10,000-block recovery-open time passed their R4 gates. Sparse checkpoint
+throughput loss remains provisional because the target-scale artifact contains
+one repetition; the repeated small sweep is supporting evidence, not a
+substitute for target-scale variance.
 The eight-worker efficiency capture reached about 50%, below the 60% target,
 although four-worker efficiency remained above 70%; that gate stays open rather
 than being waived. Exact commands, limitations, results, and CSV artifacts are
 documented in `R4_BENCHMARKS.md`.
 
 Final R4 phase-2 verification: the optimized, ASan/UBSan, and ThreadSanitizer
-suites each pass 36/36 tests; a fresh CMake Release build passes all four CTest
-targets, including the benchmark CLI contracts; and 256 seeded process-crash
-schedules pass with 9/9 failure-point coverage and the full topology-diversity
-gate.
+suites each pass 36/36 tests; a fresh CMake Release build passes all eight CTest
+targets, including the benchmark CLI contracts, early-rejection checks, and
+subprocess-tool help contracts; and
+256 seeded process-crash schedules pass with 9/9 failure-point coverage and the
+full topology-diversity gate.

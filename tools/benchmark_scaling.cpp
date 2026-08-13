@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -112,7 +113,7 @@ double process_cpu_seconds() {
 void print_help() {
     std::cout
         << "Usage: benchmark_scaling [options]\n"
-        << "  --scenarios N       scenarios per measured run (default 1000000)\n"
+        << "  --scenarios N       scenarios per measured run; N >= 2 (default 1000000)\n"
         << "  --steps N           GBM time steps (default 1)\n"
         << "  --repeats N         measured repetitions (default 3)\n"
         << "  --max-workers N     largest worker count (default min(8, hardware))\n"
@@ -166,6 +167,28 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("repeats and max-workers must be positive");
         }
         spec.validate();
+        if (spec.total_scenarios < 2U) {
+            throw std::invalid_argument(
+                "benchmark_scaling requires at least two scenarios to report "
+                "a standard error");
+        }
+        // Reject an invalid maximum before warmup or CSV output. Without this
+        // preflight, a value above the runtime's thread limit can fail only
+        // after several expensive lower-worker measurements have completed.
+        mc::EngineConfig validation_config;
+        validation_config.worker_count = max_workers;
+        validation_config.block_size = 512U;
+        validation_config.validate(spec);
+        const std::uint64_t maximum_block_count =
+            1U + (spec.total_scenarios - 1U) /
+                     validation_config.block_size;
+        if (maximum_block_count > validation_config.max_materialized_blocks ||
+            maximum_block_count >
+                static_cast<std::uint64_t>(
+                    std::numeric_limits<std::size_t>::max())) {
+            throw std::length_error(
+                "benchmark block sweep exceeds the materialized-block limit");
+        }
 
         mc::RunSpec warmup_spec = spec;
         warmup_spec.total_scenarios =
@@ -179,7 +202,7 @@ int main(int argc, char** argv) {
                      "queue_capacity_resolved,workers_requested,workers_used,"
                      "metrics_median_seconds,metrics_scenarios_per_second,"
                      "unobserved_median_seconds,unobserved_scenarios_per_second,"
-                     "metrics_overhead_percent,metrics_speedup,metrics_parallel_efficiency,"
+                     "metrics_throughput_loss_percent,metrics_speedup,metrics_parallel_efficiency,"
                      "unobserved_speedup,unobserved_parallel_efficiency,"
                      "cpu_utilization_percent,price,standard_error,block_compute_p50_ns,"
                      "block_compute_p95_ns,block_compute_p99_ns,block_commit_p50_ns,"
@@ -351,6 +374,8 @@ int main(int argc, char** argv) {
                           << last_result.workers_used << ',' << seconds << ','
                           << rate << ',' << unobserved_seconds << ','
                           << unobserved_rate << ','
+                          // This is loss of throughput relative to the
+                          // metrics-disabled rate, not elapsed-time overhead.
                           << 100.0 * (1.0 - rate / unobserved_rate) << ','
                           << metrics_speedup << ',' << metrics_efficiency << ','
                           << unobserved_speedup << ','

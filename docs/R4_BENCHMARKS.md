@@ -40,6 +40,14 @@ worker count. Each repetition contains a metrics-off and metrics-on run; their
 order alternates to reduce ordering bias, and their final aggregates must be
 bitwise identical.
 
+`metrics_throughput_loss_percent` is
+`100 * (1 - metrics_rate / metrics_disabled_rate)`. It is not elapsed-time
+overhead; a twofold slowdown is a 50% throughput loss and a 100% elapsed-time
+overhead. The explicit name prevents those two valid but different conventions
+from being confused. An earlier R4 draft called this column
+`metrics_overhead_percent`; the final header is a semantic clarification and
+does not alter the recorded numeric values.
+
 The metrics-on run reports compute and publication-to-acceptance P50/P95/P99,
 queue peaks, actual condition-variable blocked time, coordinator active time
 and acceptance rate, and the fixed-tree leaf backlog. A commit sample starts
@@ -78,6 +86,15 @@ durable run, a zero-work completed restart, and a real injected process exit for
 each block-size/cadence pair. It verifies every durable/recovered aggregate
 against the clean fixed-tree result bit for bit.
 
+The parent resolves its own executable to a canonical executable file at
+startup, including when invoked by a bare name through `PATH`, and the crash
+child re-executes that resolved file. Worker and block/materialization limits are
+validated before a temporary workspace is created or a CSV header is emitted.
+Normal completion removes the unique workspace explicitly; cleanup failure is a
+reported nonzero exit rather than a silently successful benchmark. Exceptional
+unwinding retains a non-throwing best-effort cleanup and emits a warning if that
+cleanup fails.
+
 Failure replay remains deliberately single-worker. The crash child exits at
 `ResultAfterRename` just before the selected result is accepted. When possible,
 the selected occurrence is immediately before the second periodic checkpoint,
@@ -98,10 +115,16 @@ The injection is an application-process crash on the documented local POSIX
 flush protocol. It is not a power-loss, torn-write, device-cache, or kernel
 fault benchmark.
 
-`throughput_overhead_percent` compares the complete durable path with the
-non-durable path; it includes immutable result files and mandatory manifests.
+`durable_throughput_loss_percent` is
+`100 * (1 - durable_rate / non_durable_rate)` and compares the complete durable
+path with the non-durable path; it includes immutable result files and mandatory
+manifests. The earlier `throughput_overhead_percent` header was renamed without
+changing its numeric values.
 It must not be called checkpoint-only overhead. Checkpoint-only cost is
 estimated by comparing cadences with the same workload and result-file count.
+The release gate uses
+`100 * (1 - sparse_checkpoint_rate / final_only_rate)`, so it is specifically a
+checkpoint throughput-loss gate rather than an elapsed-time-overhead gate.
 
 ## Captured local evidence
 
@@ -162,7 +185,7 @@ Captured artifacts:
 | Recoverable ≥5M/s with checkpoints no more often than 1/s | 49.2M/s, cadence ≈1.22s | Pass |
 | Coordinator ≤25% of one core before 8 workers | default 2,048/auto row active-time proxy ≈6.9% | Pass by proxy |
 | P99 commit <50ms for 10,000-scenario blocks | 9.23ms at cadence 6,000 | Pass |
-| Checkpoint overhead <10% | cadence 6,000 versus final-only was within run noise; repeated small sweep was <4% at the selected sparse cadence | Pass locally |
+| Checkpoint throughput loss <10% | cadence 6,000 versus final-only used one target-scale repetition; the repeated small sweep was <4% at the selected sparse cadence | Provisional; target-scale repetitions required |
 | Recovery open <2s for 10,000 committed blocks | completed-open 0.56s at target scale | Pass |
 
 The eight-worker efficiency target is intentionally left open. The current M1
@@ -170,3 +193,12 @@ has four performance and four efficiency cores, and this capture followed
 sustained builds and I/O, but those facts do not turn a measured miss into a
 pass. A later tuning phase should profile the metrics-off eight-worker path on
 an isolated host before changing the scheduler or claiming the gate.
+
+The checkpoint throughput-loss gate likewise remains open. The existing
+target-scale capture is useful exploratory evidence but cannot establish a
+median or run-to-run spread because it has `repeats=1`. Closing the gate requires
+at least three target-scale repetitions per sparse and final-only cadence,
+preferably by repeating the complete cadence sweep with the cadence order
+alternated between captures so order and thermal drift can be detected.
+The recorded one-repetition CSV remains unchanged evidence rather than being
+retrospectively promoted to a statistically supported pass.

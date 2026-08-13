@@ -57,6 +57,13 @@ Build the harnesses:
 make r3-tools
 ```
 
+Every self-spawning CLI resolves its parent executable to a canonical executable
+file before creating a workspace. A bare invocation name is searched using
+POSIX `PATH` semantics rather than being incorrectly treated as a path below the
+current directory. The crash and replay children therefore re-execute the same
+resolved binary whether the parent was launched as `./build/tool`, by absolute
+path, or by name through `PATH`.
+
 Run a randomized matrix. The workspace must be empty. Successful case directories are removed; a failing case and its replay descriptor are retained.
 
 ```sh

@@ -31,6 +31,12 @@ struct MatrixCase {
     mc::RunStoreConfig store_config;
 };
 
+void print_help(std::ostream& output) {
+    output << "Usage: run_crash_matrix --workspace EMPTY_PATH "
+              "[--iterations N] [--first-seed N] "
+              "[--timeout-seconds N]\n";
+}
+
 std::uint64_t mix_seed(std::uint64_t value) noexcept {
     value += 0x9E3779B97F4A7C15ULL;
     value = (value ^ (value >> 30U)) * 0xBF58476D1CE4E5B9ULL;
@@ -238,6 +244,10 @@ int main(int argc, char** argv) {
         std::filesystem::path workspace;
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument = argv[index];
+            if (argument == "--help") {
+                print_help(std::cout);
+                return 0;
+            }
             if (index + 1 >= argc) {
                 throw std::invalid_argument("missing crash-matrix option value");
             }
@@ -256,20 +266,18 @@ int main(int argc, char** argv) {
             }
         }
         if (iterations == 0U || workspace.empty()) {
-            std::cerr << "Usage: run_crash_matrix --workspace EMPTY_PATH "
-                         "[--iterations N] [--first-seed N] "
-                         "[--timeout-seconds N]\n";
+            print_help(std::cerr);
             return 2;
         }
         if (first_seed >
             std::numeric_limits<std::uint64_t>::max() - (iterations - 1U)) {
             throw std::overflow_error("crash-matrix seed range overflows");
         }
-        require_empty_workspace(workspace);
         const std::chrono::seconds timeout =
             mc::tool::checked_watchdog_timeout(timeout_seconds);
         const std::filesystem::path executable =
-            std::filesystem::absolute(argv[0]);
+            mc::tool::resolve_executable_path(argv[0]);
+        require_empty_workspace(workspace);
         std::array<bool, mc::kFailurePoints.size()> covered{};
         std::set<std::uint64_t> covered_block_sizes;
         std::set<std::uint64_t> covered_block_counts;

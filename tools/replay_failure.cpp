@@ -16,6 +16,11 @@
 
 namespace {
 
+void print_help(std::ostream& output) {
+    output << "Usage: replay_failure DESCRIPTOR --run-dir EMPTY_PATH "
+              "[--timeout-seconds N]\n";
+}
+
 int run_child(const std::filesystem::path& source_descriptor,
               const std::filesystem::path& run_directory,
               const std::filesystem::path& observed_descriptor) {
@@ -102,13 +107,16 @@ int main(int argc, char** argv) {
         if (argc == 5 && std::string_view(argv[1]) == "--child") {
             return run_child(argv[2], argv[3], argv[4]);
         }
+        if (argc == 2 && std::string_view(argv[1]) == "--help") {
+            print_help(std::cout);
+            return 0;
+        }
         if (argc < 4) {
-            std::cerr << "Usage: replay_failure DESCRIPTOR --run-dir EMPTY_PATH "
-                         "[--timeout-seconds N]\n";
+            print_help(std::cerr);
             return 2;
         }
         const std::filesystem::path executable =
-            std::filesystem::absolute(argv[0]);
+            mc::tool::resolve_executable_path(argv[0]);
         const std::filesystem::path descriptor_path = argv[1];
         std::filesystem::path run_directory;
         std::uint64_t timeout_seconds = 300U;

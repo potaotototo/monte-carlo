@@ -96,8 +96,20 @@ if(BUILD_TESTING)
     add_test(NAME benchmark_aggregation_smoke COMMAND benchmark_aggregation
              --scenarios 4096 --repeats 1 --max-workers 2
              --block-size 512)
-    add_test(NAME benchmark_persistence_smoke COMMAND benchmark_persistence
-             --scenarios 1024 --workers 2 --repeats 1
+    add_test(NAME benchmark_scaling_rejects_single_scenario
+             COMMAND benchmark_scaling --scenarios 1 --repeats 1
+             --max-workers 1)
+    add_test(NAME benchmark_scaling_rejects_oversized_worker_count
+             COMMAND benchmark_scaling --scenarios 2 --repeats 1
+             --max-workers 257)
+    add_test(NAME run_crash_matrix_help COMMAND run_crash_matrix --help)
+    add_test(NAME replay_failure_help COMMAND replay_failure --help)
+    # Launch by a bare name through PATH so the persistence tool's crash-child
+    # self-exec path is covered, not only CTest's resolved target path.
+    add_test(NAME benchmark_persistence_smoke
+             COMMAND ${CMAKE_COMMAND} -E env
+             "PATH=$<TARGET_FILE_DIR:benchmark_persistence>:$ENV{PATH}"
+             benchmark_persistence --scenarios 1024 --workers 2 --repeats 1
              --block-sizes 256 --checkpoint-intervals 1,4)
     set_tests_properties(benchmark_scaling_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION
@@ -105,6 +117,17 @@ if(BUILD_TESTING)
     set_tests_properties(benchmark_aggregation_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION
             "scenarios,time_steps,repeats,strategy,block_size,workers_requested")
+    set_tests_properties(
+        benchmark_scaling_rejects_single_scenario
+        benchmark_scaling_rejects_oversized_worker_count
+        PROPERTIES
+            WILL_FAIL TRUE
+            FAIL_REGULAR_EXPRESSION
+                "scenarios,time_steps,repeats,block_size,queue_capacity_requested")
+    set_tests_properties(run_crash_matrix_help PROPERTIES
+        PASS_REGULAR_EXPRESSION "Usage: run_crash_matrix")
+    set_tests_properties(replay_failure_help PROPERTIES
+        PASS_REGULAR_EXPRESSION "Usage: replay_failure")
     set_tests_properties(benchmark_persistence_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION
             "crash_recovery_open_ns,recovery_computed_scenarios,recomputed_scenarios_after_crash"

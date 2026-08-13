@@ -54,9 +54,34 @@ public:
     BenchmarkWorkspace(const BenchmarkWorkspace&) = delete;
     BenchmarkWorkspace& operator=(const BenchmarkWorkspace&) = delete;
 
-    ~BenchmarkWorkspace() {
-        std::error_code ignored;
-        static_cast<void>(std::filesystem::remove_all(root_, ignored));
+    ~BenchmarkWorkspace() noexcept {
+        if (root_.empty()) {
+            return;
+        }
+        std::error_code error;
+        static_cast<void>(std::filesystem::remove_all(root_, error));
+        if (error) {
+            try {
+                std::cerr << "warning: cannot remove benchmark workspace '"
+                          << root_.string() << "': " << error.message() << '\n';
+            } catch (...) {
+                // Destructors cannot turn cleanup diagnostics into termination.
+            }
+        }
+    }
+
+    void cleanup() {
+        if (root_.empty()) {
+            return;
+        }
+        std::error_code error;
+        static_cast<void>(std::filesystem::remove_all(root_, error));
+        if (error) {
+            throw std::runtime_error(
+                "cannot remove benchmark workspace '" + root_.string() +
+                "': " + error.message());
+        }
+        root_.clear();
     }
 
     [[nodiscard]] std::filesystem::path run_directory(
@@ -345,8 +370,6 @@ int main(int argc, char** argv) {
         if (argc >= 2 && std::string_view(argv[1]) == "--crash-child") {
             return run_crash_child(argc, argv);
         }
-        const std::filesystem::path executable =
-            std::filesystem::absolute(argv[0]);
         mc::RunSpec spec;
         spec.total_scenarios = 200'000U;
         const std::size_t hardware =
@@ -398,12 +421,32 @@ int main(int argc, char** argv) {
             throw std::invalid_argument("workers and repeats must be positive");
         }
         spec.validate();
+        // Validate every user-selected shape before creating a temporary
+        // workspace or printing a CSV header. This prevents partial output and
+        // wasted warmup/measurement work for invalid worker or block limits.
+        for (const std::uint64_t block_size : block_sizes) {
+            mc::EngineConfig validation_config;
+            validation_config.worker_count = workers;
+            validation_config.block_size = block_size;
+            validation_config.validate(spec);
+            const std::uint64_t block_count =
+                1U + (spec.total_scenarios - 1U) / block_size;
+            if (block_count > validation_config.max_materialized_blocks ||
+                block_count >
+                    static_cast<std::uint64_t>(
+                        std::numeric_limits<std::size_t>::max())) {
+                throw std::length_error(
+                    "benchmark block size exceeds the materialized-block limit");
+            }
+        }
+        const std::filesystem::path executable =
+            mc::tool::resolve_executable_path(argv[0]);
 
         BenchmarkWorkspace workspace(workspace_parent);
         std::cout
             << "scenarios,time_steps,repeats,block_size,checkpoint_interval,workers,"
                "blocks,non_durable_median_seconds,"
-               "durable_median_seconds,durable_scenarios_per_second,throughput_overhead_percent,"
+               "durable_median_seconds,durable_scenarios_per_second,durable_throughput_loss_percent,"
                "cpu_utilization_percent,block_commit_p50_ns,block_commit_p95_ns,"
                "block_commit_p99_ns,result_persist_p50_ns,result_persist_p95_ns,"
                "result_persist_p99_ns,checkpoint_p50_ns,checkpoint_p95_ns,"
@@ -574,6 +617,8 @@ int main(int argc, char** argv) {
                           << block_size << ',' << interval << ',' << workers
                           << ',' << block_count << ',' << non_durable_seconds
                           << ',' << durable_seconds << ',' << durable_rate << ','
+                          // This is loss of throughput relative to the
+                          // non-durable rate, not elapsed-time overhead.
                           << 100.0 * (1.0 - durable_rate / non_durable_rate) << ','
                           << median(std::move(cpu_utilization)) << ','
                           << median(std::move(commit_p50)) << ','
@@ -601,6 +646,7 @@ int main(int argc, char** argv) {
                           << clean.aggregate.mean << '\n';
             }
         }
+        workspace.cleanup();
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "error: " << error.what() << '\n';
