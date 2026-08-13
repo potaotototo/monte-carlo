@@ -40,11 +40,18 @@ The runtime records:
 - per worker: completed blocks/scenarios, assignment wait, block computation,
   and completion-queue wait;
 - per executed block: computation latency indexed by stable `block_id`;
+- per accepted block: worker-publication through coordinator-acceptance latency,
+  including completion-queue residence, validation, and (for durable runs)
+  result persistence and any checkpoint triggered by that block;
 - scheduler: total time blocked because the bounded assignment queue was full;
 - coordinator: completion-queue wait and result validation/consumption time;
 - queues: maximum observed depth, updated while the existing queue mutex is
   held so no second synchronization mechanism is introduced;
 - final fixed-position reduction time and total invocation time;
+- maximum fixed-tree leaf backlog in blocks and bytes. The current final-only
+  tree retains every accepted/recovered leaf, so a successful run reaches the
+  full block universe; this is a memory-pressure metric, not a dirty-segment
+  or queue-depth metric;
 - durable open/recovery time;
 - per newly installed result and per newly installed checkpoint latency;
 - durable stage totals for write, file `fsync`, rename, and directory `fsync`,
@@ -70,6 +77,8 @@ Per-block vectors use zero as an explicit missing-sample sentinel:
   executed in this invocation;
 - `result_persist_ns[block_id] == 0` means no new durable result was installed
   for that block;
+- `block_commit_ns[block_id] == 0` means the block was recovered, not accepted,
+  or the invocation failed before commit samples could be finalized;
 - an empty checkpoint vector means no checkpoint was installed.
 
 All per-block, worker, and expected checkpoint storage is allocated before
@@ -88,10 +97,13 @@ accepted quantile range is `[0, 1]`, with zero selecting the minimum and one the
 maximum. CLI summaries currently emit p50, p95, and p99.
 
 The vectors are bounded by `max_materialized_blocks`, the same limit that guards
-the eager block universe. This makes opt-in memory cost explicit: the two
-per-block `uint64_t` vectors require 16 bytes per materialized block, with up to
+the eager block universe. This makes opt-in memory cost explicit: the three
+per-block `uint64_t` vectors require 24 bytes per materialized block, with up to
 another 8 bytes per expected checkpoint plus worker records and vector
-bookkeeping. The disabled path allocates none of this storage.
+bookkeeping. Commit timing stages a steady-clock marker in its already allocated
+output slot while a run is active, avoiding a fourth per-block allocation. A
+failed invocation clears all commit samples before throwing so a marker is never
+reported as a latency. The disabled path allocates none of this storage.
 
 ## Command-line and benchmark use
 
@@ -100,12 +112,13 @@ durable restart correctly reports no workers, no block/persistence latency
 samples, and zero newly installed files, while still reporting recovery-open,
 reduction, and total elapsed time.
 
-`benchmark_scaling` enables metrics for every measured repetition and adds
-median block p50/p95/p99 latency, queue peaks, scheduler wait, coordinator wait,
-and coordinator-consumption columns. Its wall-clock throughput therefore
-measures the metrics-enabled path. Parallel efficiency divides by the workers
-actually used, rather than workers requested, because a run with fewer blocks
-cannot activate surplus threads.
+`benchmark_scaling` pairs a metrics-disabled and metrics-enabled execution for
+every repetition, alternating their order. It reports both throughputs, the
+observed instrumentation overhead, median block/commit p50/p95/p99 latency,
+queue peaks, scheduler wait, coordinator wait, and coordinator-consumption
+columns. Parallel efficiency divides by the workers actually used, rather than
+workers requested, because a run with fewer blocks cannot activate surplus
+threads. Every pair is also checked for bitwise-identical final aggregates.
 
 Timing data is noisy and machine-specific. Use repeated runs, compare medians,
 pin workload/build/power conditions, and treat small differences as noise.
@@ -129,10 +142,17 @@ metrics fields are not a general-purpose concurrent aggregation API.
 - Invalid or non-finite percentile quantiles fail closed.
 - Optimized, ASan/UBSan, ThreadSanitizer, and CMake/CTest suites pass.
 
-## Deferred R4 work
+## Work completed in R4 phase 2
 
-Phase 1 intentionally does not add time-series queue sampling, HDR histograms,
-hardware performance counters, cross-process aggregation, or an automated
-durable checkpoint-cadence sweep. The next R4 slice should capture repeatable
-compute and persistence baselines and use these measurements to choose defaults,
-without altering R3 recovery semantics.
+The compute/queue, aggregation-strategy, durable checkpoint, real process-crash,
+and 10,000-block recovery sweeps are specified in `R4_BENCHMARKS.md`, together
+with captured local baselines and the resulting default-policy decisions.
+
+## Deferred work
+
+R4 does not add time-series queue sampling, HDR histograms, hardware performance
+counters, cross-process metric aggregation, CPU affinity, or a deterministic
+multi-worker crash scheduler. Process CPU utilization can exceed 100% because
+it is total CPU time divided by wall time across all threads. Coordinator active
+time is an explicit proxy for coordinator-core pressure, not an OS-attributed
+per-thread CPU counter.

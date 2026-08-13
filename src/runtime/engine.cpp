@@ -32,10 +32,28 @@ std::uint64_t elapsed_ns(MetricsClock::time_point started) noexcept {
     return elapsed > 0 ? static_cast<std::uint64_t>(elapsed) : 1U;
 }
 
+std::uint64_t clock_marker_ns() noexcept {
+    const auto marker = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        MetricsClock::now().time_since_epoch()).count();
+    return marker > 0 ? static_cast<std::uint64_t>(marker) : 1U;
+}
+
+std::uint64_t elapsed_since_marker_ns(std::uint64_t started) noexcept {
+    const std::uint64_t stopped = clock_marker_ns();
+    return stopped > started ? stopped - started : 1U;
+}
+
 void add_metric(std::uint64_t& total, std::uint64_t value) noexcept {
     total = value > std::numeric_limits<std::uint64_t>::max() - total
                 ? std::numeric_limits<std::uint64_t>::max()
                 : total + value;
+}
+
+void clear_commit_samples(RuntimeMetrics* metrics) noexcept {
+    if (metrics != nullptr) {
+        std::fill(metrics->block_commit_ns.begin(),
+                  metrics->block_commit_ns.end(), 0U);
+    }
 }
 
 class TotalMetricsTimer {
@@ -150,6 +168,10 @@ std::size_t execute_missing_blocks(
                 "runtime metrics worker capacity was not preallocated");
         }
         metrics->workers.assign(actual_worker_count, {});
+        metrics->max_reduction_backlog_blocks =
+            blocks.size() - missing_count;
+        metrics->max_reduction_backlog_bytes =
+            metrics->max_reduction_backlog_blocks * sizeof(AggregateStats);
     }
     try {
         for (std::size_t worker_index = 0;
@@ -199,6 +221,11 @@ std::size_t execute_missing_blocks(
                                 compute_ns;
                         }
                         blocked_ns = 0U;
+                        if (metrics != nullptr) {
+                            metrics->block_commit_ns[
+                                static_cast<std::size_t>(block.block_id)] =
+                                clock_marker_ns();
+                        }
                         const bool submitted = completions.push(
                             std::move(result),
                             metrics == nullptr ? nullptr : &blocked_ns);
@@ -229,6 +256,7 @@ std::size_t execute_missing_blocks(
         for (std::thread& worker : workers) {
             worker.join();
         }
+        clear_commit_samples(metrics);
         throw;
     }
 
@@ -281,7 +309,18 @@ std::size_t execute_missing_blocks(
             consume_started = MetricsClock::now();
         }
         try {
+            const std::size_t completed_index = static_cast<std::size_t>(
+                completed.block.block_id);
             consume_result(std::move(completed));
+            if (metrics != nullptr) {
+                metrics->block_commit_ns[completed_index] =
+                    elapsed_since_marker_ns(
+                        metrics->block_commit_ns[completed_index]);
+                ++metrics->max_reduction_backlog_blocks;
+                metrics->max_reduction_backlog_bytes =
+                    metrics->max_reduction_backlog_blocks *
+                    sizeof(AggregateStats);
+            }
         } catch (...) {
             if (metrics != nullptr) {
                 add_metric(coordinator_consume_ns, elapsed_ns(consume_started));
@@ -306,6 +345,10 @@ std::size_t execute_missing_blocks(
         metrics->coordinator_consume_ns = coordinator_consume_ns;
     }
     if (first_error) {
+        // Publication timestamps are staged in the output slots to avoid a
+        // fourth per-block allocation. Never expose those markers as latency
+        // samples when execution fails before all accepted blocks are timed.
+        clear_commit_samples(metrics);
         std::rethrow_exception(first_error);
     }
     return actual_worker_count;
@@ -499,6 +542,12 @@ DurableRunResult run_parallel_durable(
         ++recovered_blocks;
         recovered_scenarios +=
             result.block.end_scenario - result.block.start_scenario;
+    }
+    if (metrics != nullptr) {
+        metrics->max_reduction_backlog_blocks =
+            static_cast<std::size_t>(recovered_blocks);
+        metrics->max_reduction_backlog_bytes =
+            metrics->max_reduction_backlog_blocks * sizeof(AggregateStats);
     }
 
     std::uint64_t computed_blocks = 0;

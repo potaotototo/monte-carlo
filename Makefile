@@ -33,12 +33,14 @@ BUILD_DIR := build
 RUNNER := $(BUILD_DIR)/run_simulation
 TESTS := $(BUILD_DIR)/mc_tests
 BENCHMARK := $(BUILD_DIR)/benchmark_scaling
+AGGREGATION_BENCHMARK := $(BUILD_DIR)/benchmark_aggregation
+PERSISTENCE_BENCHMARK := $(BUILD_DIR)/benchmark_persistence
 REPLAY_FAILURE := $(BUILD_DIR)/replay_failure
 CRASH_MATRIX := $(BUILD_DIR)/run_crash_matrix
 BUILD_CONFIG_STAMP := $(BUILD_DIR)/.build-config
 BUILD_CONFIG_ID := $(SOURCE_REVISION)-$(BUILD_FLAGS_ID)
 
-.PHONY: all test benchmark r3-tools clean FORCE
+.PHONY: all test benchmark benchmark-tools r3-tools clean FORCE
 
 all: $(RUNNER)
 
@@ -69,6 +71,14 @@ $(BENCHMARK): $(LIB_SOURCES) tools/benchmark_scaling.cpp $(HEADERS) $(INTERNAL_H
 
 benchmark: $(BENCHMARK)
 
+benchmark-tools: $(BENCHMARK) $(AGGREGATION_BENCHMARK) $(PERSISTENCE_BENCHMARK)
+
+$(AGGREGATION_BENCHMARK): $(LIB_SOURCES) tools/benchmark_aggregation.cpp $(HEADERS) $(INTERNAL_HEADERS) $(BUILD_CONFIG_STAMP) | $(BUILD_DIR)
+	$(CXX) $(MC_CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) $(LDFLAGS) $(LDLIBS) -o $@
+
+$(PERSISTENCE_BENCHMARK): $(LIB_SOURCES) tools/benchmark_persistence.cpp $(HEADERS) $(INTERNAL_HEADERS) $(TOOL_HEADERS) $(BUILD_CONFIG_STAMP) | $(BUILD_DIR)
+	$(CXX) $(MC_CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) $(LDFLAGS) $(LDLIBS) -o $@
+
 $(REPLAY_FAILURE): $(LIB_SOURCES) tools/replay_failure.cpp $(HEADERS) $(INTERNAL_HEADERS) $(TOOL_HEADERS) $(BUILD_CONFIG_STAMP) | $(BUILD_DIR)
 	$(CXX) $(MC_CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) $(LDFLAGS) $(LDLIBS) -o $@
 
@@ -78,4 +88,4 @@ $(CRASH_MATRIX): $(LIB_SOURCES) tools/run_crash_matrix.cpp $(HEADERS) $(INTERNAL
 r3-tools: $(REPLAY_FAILURE) $(CRASH_MATRIX)
 
 clean:
-	rm -f $(RUNNER) $(TESTS) $(BENCHMARK) $(REPLAY_FAILURE) $(CRASH_MATRIX) $(BUILD_CONFIG_STAMP) $(BUILD_CONFIG_STAMP).tmp
+	rm -f $(RUNNER) $(TESTS) $(BENCHMARK) $(AGGREGATION_BENCHMARK) $(PERSISTENCE_BENCHMARK) $(REPLAY_FAILURE) $(CRASH_MATRIX) $(BUILD_CONFIG_STAMP) $(BUILD_CONFIG_STAMP).tmp

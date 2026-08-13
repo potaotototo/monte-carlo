@@ -1,6 +1,6 @@
 # Fault-Tolerant Parallel Monte Carlo Runtime
 
-This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime plus the first R4 observability slice: a validated GBM pricer, deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, replayable process-crash harness, and opt-in runtime/persistence metrics.
+This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime plus R4 observability and benchmark tooling: a validated GBM pricer, deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, replayable process-crash harness, opt-in runtime/persistence metrics, and repeatable compute, aggregation, checkpoint, and recovery sweeps.
 
 ## What works now
 
@@ -28,6 +28,9 @@ This repository implements the project described in the supplied technical plan 
 - Nine named result/manifest crash points exercised through real child-process termination.
 - Immutable SHA-256-protected replay-schema-v2 descriptors, watchdog-bounded seeded crash matrices, and descriptor-driven trace reproduction.
 - Opt-in monotonic runtime metrics for workers, bounded queues, coordinator work, reduction, and durable write stages without changing deterministic identities.
+- Publication-to-acceptance latency, fixed-tree backlog accounting, paired
+  metrics-on/off throughput, aggregation-strategy comparisons, and real-crash
+  checkpoint/recovery benchmarks.
 - JSON output containing the estimate, standard error, 95% confidence interval, throughput, and analytic error where applicable.
 
 R3 validates application-level process crashes at every R2 result/manifest persistence boundary. It does not emulate machine power loss, torn device writes, or filesystem/kernel faults; the durability claim remains scoped to tested local POSIX filesystems honoring the documented flush protocol.
@@ -40,6 +43,7 @@ Both a dependency-free Makefile and a CMake build are provided.
 make test
 make
 make benchmark
+make benchmark-tools
 make r3-tools
 ```
 
@@ -79,7 +83,7 @@ Enable durable checkpoints and resume by rerunning the same command:
 
 The run directory is exclusively owned while a coordinator is active. Recovery rejects changes to the RunSpec, block size, or pinned build/runtime identity; worker count may change.
 
-If `--checkpoint-blocks` is omitted (or set to `0`), the runtime chooses at least 64 blocks per full snapshot and caps the planned number of periodic snapshots at 1,024. A nonzero value is an explicit recovery-granularity versus write-amplification choice.
+If `--checkpoint-blocks` is omitted (or set to `0`), the runtime chooses at least 1,024 blocks per full snapshot and caps the planned number of periodic snapshots at 1,024. R4 raised the floor from 64 after a 10,000-block benchmark showed that 64 created 158 full manifests and reduced durable throughput by about 25%; 1,024 removed that measurable penalty on the same host. A nonzero value is an explicit recovery-granularity versus write-amplification choice.
 
 Use `./build/run_simulation --help` for every option.
 
@@ -92,6 +96,13 @@ Capture a repeatable scaling baseline as CSV:
 
 ```sh
 ./build/benchmark_scaling --scenarios 10000000 --repeats 5 --max-workers 8
+```
+
+Run the full R4 benchmark tools and see their contracts:
+
+```sh
+./build/benchmark_aggregation --scenarios 1000000 --repeats 3 --max-workers 8
+./build/benchmark_persistence --scenarios 200000 --repeats 3
 ```
 
 Run 1,000 deterministic crash schedules and retain only failures:
@@ -142,12 +153,12 @@ docs/             phased implementation notes
 | R1.5 | Frozen hashes/result validation and pre-persistence hardening | Complete |
 | R2 | Durable block results, atomic manifests, and restart recovery | Complete |
 | R3 | Deterministic crash injection and replay descriptors | Complete |
-| R4 | Synchronization, coordinator, and persistence benchmarks | Phase 1 complete |
+| R4 | Synchronization, coordinator, persistence, and recovery benchmarks | Phase 2 implemented; 8-worker efficiency gate open |
 | R5 | Heston or another advanced risk/model extension | Planned |
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the phased handoff and acceptance evidence.
 The durable file, commit, and recovery contract is specified in [docs/R2_DURABLE_RECOVERY.md](docs/R2_DURABLE_RECOVERY.md).
 The crash-point, descriptor, matrix, and replay contract is specified in [docs/R3_FAILURE_INJECTION.md](docs/R3_FAILURE_INJECTION.md).
-The opt-in measurement contract and deferred R4 work are specified in [docs/R4_METRICS.md](docs/R4_METRICS.md).
+The opt-in measurement contract is specified in [docs/R4_METRICS.md](docs/R4_METRICS.md), and the benchmark methodology, captured baselines, tuning decisions, and remaining performance gate are in [docs/R4_BENCHMARKS.md](docs/R4_BENCHMARKS.md).
 The first measured R1.5 scaling snapshot is in [docs/R1_5_BASELINE.csv](docs/R1_5_BASELINE.csv).
 Known numerical, protocol, resource, and recovery edge cases—including the rationale for a 53-bit binary64 uniform—are tracked in [docs/EDGE_CASES_AND_RELEASE_GATES.md](docs/EDGE_CASES_AND_RELEASE_GATES.md).

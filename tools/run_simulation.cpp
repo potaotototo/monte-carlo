@@ -294,9 +294,15 @@ int main(int argc, char** argv) {
                       << "    \"max_assignment_queue_depth\": "
                       << runtime_metrics.max_assignment_queue_depth << ",\n"
                       << "    \"max_completion_queue_depth\": "
-                      << runtime_metrics.max_completion_queue_depth << ",\n";
+                      << runtime_metrics.max_completion_queue_depth << ",\n"
+                      << "    \"max_reduction_backlog_blocks\": "
+                      << runtime_metrics.max_reduction_backlog_blocks << ",\n"
+                      << "    \"max_reduction_backlog_bytes\": "
+                      << runtime_metrics.max_reduction_backlog_bytes << ",\n";
             print_latency_summary("block_compute_ns",
                                   runtime_metrics.block_compute_ns, true);
+            print_latency_summary("block_commit_ns",
+                                  runtime_metrics.block_commit_ns, true);
             print_latency_summary("result_persist_ns",
                                   runtime_metrics.result_persist_ns, true);
             print_latency_summary("checkpoint_ns",

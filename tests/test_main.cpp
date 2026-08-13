@@ -996,6 +996,8 @@ void durable_determinism_failure_is_persisted() {
 }
 
 void durable_storage_limits_fail_closed() {
+    check(mc::kMinimumAutomaticCheckpointBlocks == 1'024U,
+          "R4 automatic checkpoint floor decision drifted");
     TemporaryDirectory directory;
     mc::RunSpec spec;
     spec.total_scenarios = 8;
@@ -1528,7 +1530,8 @@ void runtime_metrics_are_opt_in_and_result_neutral() {
     check(metrics.workers.size() == observed.workers_used,
           "metrics did not create one record per active worker");
     check(metrics.block_compute_ns.size() == observed.block_count &&
-              metrics.result_persist_ns.size() == observed.block_count,
+              metrics.result_persist_ns.size() == observed.block_count &&
+              metrics.block_commit_ns.size() == observed.block_count,
           "metrics vectors do not match the deterministic block universe");
 
     std::uint64_t completed_blocks = 0U;
@@ -1544,6 +1547,10 @@ void runtime_metrics_are_opt_in_and_result_neutral() {
                       metrics.block_compute_ns.end(),
                       [](std::uint64_t sample) { return sample > 0U; }),
           "an executed block has no compute-latency sample");
+    check(std::all_of(metrics.block_commit_ns.begin(),
+                      metrics.block_commit_ns.end(),
+                      [](std::uint64_t sample) { return sample > 0U; }),
+          "an accepted block has no publication-to-acceptance sample");
     check(std::all_of(metrics.result_persist_ns.begin(),
                       metrics.result_persist_ns.end(),
                       [](std::uint64_t sample) { return sample == 0U; }) &&
@@ -1569,6 +1576,10 @@ void runtime_metrics_are_opt_in_and_result_neutral() {
               metrics.max_completion_queue_depth <=
                   observed.workers_used * 2U,
           "observed queue peak exceeds the resolved bounded capacity");
+    check(metrics.max_reduction_backlog_blocks == observed.block_count &&
+              metrics.max_reduction_backlog_bytes ==
+                  observed.block_count * sizeof(mc::AggregateStats),
+          "fixed-tree backlog metrics do not cover every accepted leaf");
     check(metrics.total_elapsed_ns > 0U &&
               metrics.fixed_tree_reduce_ns > 0U,
           "top-level metrics did not record elapsed time");
@@ -1635,7 +1646,8 @@ void direct_store_metrics_cover_open_and_preallocate() {
         check(metrics.durable_open_ns > 0U,
               "direct durable-store open omitted its elapsed time");
         check(metrics.block_compute_ns.size() == 8U &&
-                  metrics.result_persist_ns.size() == 8U,
+                  metrics.result_persist_ns.size() == 8U &&
+                  metrics.block_commit_ns.size() == 8U,
               "direct durable-store open did not reset the block universe");
         check(metrics.workers.empty() && metrics.workers.capacity() >= 3U,
               "worker metrics were not preallocated before durable writes");
@@ -1737,6 +1749,11 @@ void durable_metrics_capture_only_new_io() {
               restart_metrics.durable_io.manifest_files_installed == 0U &&
               restart_metrics.durable_io.bytes_written == 0U,
           "completed restart reported files that it did not install");
+    check(std::all_of(restart_metrics.block_commit_ns.begin(),
+                      restart_metrics.block_commit_ns.end(),
+                      [](std::uint64_t sample) { return sample == 0U; }) &&
+              restart_metrics.max_reduction_backlog_blocks == 8U,
+          "completed restart misreported acceptance latency or leaf backlog");
     check(!mc::latency_percentile_ns(
                restart_metrics.block_compute_ns, 0.50).has_value() &&
               !mc::latency_percentile_ns(

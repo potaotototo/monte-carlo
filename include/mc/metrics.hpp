@@ -35,11 +35,17 @@ struct RuntimeMetrics {
     std::uint64_t fixed_tree_reduce_ns = 0;
     std::size_t max_assignment_queue_depth = 0;
     std::size_t max_completion_queue_depth = 0;
+    std::size_t max_reduction_backlog_blocks = 0;
+    std::size_t max_reduction_backlog_bytes = 0;
     std::vector<WorkerMetrics> workers;
     // Zero means the block was recovered or not executed in this invocation.
     std::vector<std::uint64_t> block_compute_ns;
     // Zero means no new durable result was installed for this block.
     std::vector<std::uint64_t> result_persist_ns;
+    // Worker publication through coordinator acceptance, including queueing.
+    // Zero means the block was not accepted in this invocation. As with every
+    // metrics field, callers must not inspect it while the run is active.
+    std::vector<std::uint64_t> block_commit_ns;
     std::vector<std::uint64_t> checkpoint_ns;
     std::uint64_t checkpoint_samples_dropped = 0;
     DurableIoMetrics durable_io;

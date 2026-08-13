@@ -73,6 +73,12 @@ target_link_libraries(run_simulation PRIVATE mc_runtime)
 add_executable(benchmark_scaling tools/benchmark_scaling.cpp)
 target_link_libraries(benchmark_scaling PRIVATE mc_runtime)
 
+add_executable(benchmark_aggregation tools/benchmark_aggregation.cpp)
+target_link_libraries(benchmark_aggregation PRIVATE mc_runtime)
+
+add_executable(benchmark_persistence tools/benchmark_persistence.cpp)
+target_link_libraries(benchmark_persistence PRIVATE mc_runtime)
+
 add_executable(replay_failure tools/replay_failure.cpp)
 target_link_libraries(replay_failure PRIVATE mc_runtime)
 
@@ -84,4 +90,23 @@ if(BUILD_TESTING)
     add_executable(mc_tests tests/test_main.cpp)
     target_link_libraries(mc_tests PRIVATE mc_runtime)
     add_test(NAME mc_tests COMMAND mc_tests)
+    add_test(NAME benchmark_scaling_smoke COMMAND benchmark_scaling
+             --scenarios 4096 --repeats 1 --max-workers 2
+             --queue-capacities 0,1)
+    add_test(NAME benchmark_aggregation_smoke COMMAND benchmark_aggregation
+             --scenarios 4096 --repeats 1 --max-workers 2
+             --block-size 512)
+    add_test(NAME benchmark_persistence_smoke COMMAND benchmark_persistence
+             --scenarios 1024 --workers 2 --repeats 1
+             --block-sizes 256 --checkpoint-intervals 1,4)
+    set_tests_properties(benchmark_scaling_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "scenarios,time_steps,repeats,block_size,queue_capacity_requested")
+    set_tests_properties(benchmark_aggregation_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "scenarios,time_steps,repeats,strategy,block_size,workers_requested")
+    set_tests_properties(benchmark_persistence_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "crash_recovery_open_ns,recovery_computed_scenarios,recomputed_scenarios_after_crash"
+        TIMEOUT 60)
 endif()

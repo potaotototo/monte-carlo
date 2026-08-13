@@ -16,10 +16,10 @@ namespace mc {
 class FailureInjector;
 
 inline constexpr std::uint32_t kStorageSchemaVersion = 1;
-// Zero selects the automatic full-snapshot cadence: at least 64 blocks per
+// Zero selects the automatic full-snapshot cadence: at least 1,024 blocks per
 // checkpoint and at most 1,024 periodic manifests for the whole run.
 inline constexpr std::uint64_t kDefaultCheckpointIntervalBlocks = 0;
-inline constexpr std::uint64_t kMinimumAutomaticCheckpointBlocks = 64;
+inline constexpr std::uint64_t kMinimumAutomaticCheckpointBlocks = 1'024;
 inline constexpr std::uint64_t kMaximumAutomaticPeriodicManifests = 1'024;
 inline constexpr std::uint64_t kDefaultMaxStorageBytes =
     std::uint64_t{64} * 1024U * 1024U * 1024U;

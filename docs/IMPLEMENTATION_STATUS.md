@@ -147,3 +147,52 @@ Acceptance evidence after the metrics bug audit: optimized, ASan/UBSan, and
 ThreadSanitizer builds pass 36/36 tests; an independent CMake Release build
 passes CTest; and a 256-seed post-instrumentation R3 regression passes with 9/9
 crash-point coverage and the full topology-diversity gate.
+
+## R4 phase 2 — benchmark matrix and measured tuning
+
+Implemented:
+
+- paired metrics-disabled/metrics-enabled block-size, worker-count, and bounded
+  queue-capacity sweeps with bitwise result-neutrality checks;
+- global-mutex, portable atomic-sum, unpadded worker-local, padded worker-local,
+  and production deterministic-tree aggregation comparisons;
+- durable block-size/checkpoint-cadence sweeps covering result, checkpoint,
+  publication-to-acceptance, completed-restart, file-count, byte-count, and CPU
+  measurements;
+- a real single-worker R3 process crash in every persistence row, including
+  immutable replay-descriptor verification, recovery-open timing, total
+  recovery work, duplicate-work accounting, and the theoretical recomputation
+  bound;
+- focused 10,000-committed-block and 100-million-scenario target-scale runs;
+- CMake smoke tests with CSV-header contract checks for all three tools.
+
+Post-implementation audit fixes and decisions:
+
+- replaced unavailable `atomic<double>::fetch_add` with a relaxed portable
+  compare/exchange loop;
+- initialized fixed-tree backlog correctly on zero-work completed restarts;
+- ensured failed invocations clear staged commit timestamps rather than exposing
+  them as latency samples;
+- separated all recovery computation from genuinely duplicated work after a
+  crash;
+- made every CSV row self-describing and quantified opt-in metrics overhead;
+- retained the deterministic tree, 2,048-scenario block default, and automatic
+  queue sizing because alternatives did not show a stable end-to-end win;
+- raised the automatic full-manifest cadence floor from 64 to 1,024 blocks.
+  On the target-scale run this reduced the manifest count from 158 to 11 and
+  recovered about 25% throughput, at the documented cost of a larger default
+  crash-recomputation window.
+
+Local target evidence: single-thread throughput, recoverable throughput,
+coordinator active-time proxy, 10,000-scenario P99 commit latency, sparse
+checkpoint overhead, and 10,000-block recovery-open time passed their R4 gates.
+The eight-worker efficiency capture reached about 50%, below the 60% target,
+although four-worker efficiency remained above 70%; that gate stays open rather
+than being waived. Exact commands, limitations, results, and CSV artifacts are
+documented in `R4_BENCHMARKS.md`.
+
+Final R4 phase-2 verification: the optimized, ASan/UBSan, and ThreadSanitizer
+suites each pass 36/36 tests; a fresh CMake Release build passes all four CTest
+targets, including the benchmark CLI contracts; and 256 seeded process-crash
+schedules pass with 9/9 failure-point coverage and the full topology-diversity
+gate.
