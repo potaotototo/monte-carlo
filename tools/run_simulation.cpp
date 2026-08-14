@@ -7,6 +7,7 @@
 #include "mc/run_spec.hpp"
 
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <iomanip>
@@ -43,11 +44,17 @@ void print_help() {
         << "  --min-free-bytes N     free space retained before each write (default 64 MiB)\n"
         << "  --max-manifest-bytes N maximum accepted manifest size (default 128 MiB)\n"
         << "  --seed N            global Philox key (default 1)\n"
+        << "  --model TYPE        gbm or heston (default gbm)\n"
         << "  --payoff TYPE       european or asian\n"
         << "  --spot X            initial asset price\n"
         << "  --strike X          option strike\n"
         << "  --rate X            continuously compounded risk-free rate\n"
         << "  --volatility X      annualized volatility\n"
+        << "  --heston-v0 X       Heston initial variance (default 0.04)\n"
+        << "  --heston-kappa X    Heston mean-reversion rate (default 1.5)\n"
+        << "  --heston-theta X    Heston long-run variance (default 0.04)\n"
+        << "  --heston-xi X       Heston volatility of variance (default 0.3)\n"
+        << "  --heston-rho X      Heston correlation in [-1,1] (default -0.7)\n"
         << "  --maturity X        maturity in years\n"
         << "  --antithetic        aggregate antithetic pair-means\n"
         << "  --metrics           emit opt-in R4 runtime and durable-I/O metrics\n"
@@ -89,7 +96,14 @@ int main(int argc, char** argv) {
         bool durable = false;
         bool store_policy_set = false;
         bool metrics_enabled = false;
+        bool gbm_volatility_set = false;
         config.worker_count = std::max(1U, std::thread::hardware_concurrency());
+        const auto heston_parameters = [&]() -> mc::HestonParams& {
+            if (!spec.heston.has_value()) {
+                spec.heston.emplace();
+            }
+            return *spec.heston;
+        };
 
         for (int index = 1; index < argc; ++index) {
             const std::string_view argument = argv[index];
@@ -146,6 +160,16 @@ int main(int argc, char** argv) {
             } else if (argument == "--seed") {
                 spec.global_seed =
                     mc::parse_u64(require_value(argc, argv, index), "seed");
+            } else if (argument == "--model") {
+                const std::string model = require_value(argc, argv, index);
+                if (model == "gbm") {
+                    spec.model_type = mc::ModelType::Gbm;
+                } else if (model == "heston") {
+                    spec.model_type = mc::ModelType::Heston;
+                    static_cast<void>(heston_parameters());
+                } else {
+                    throw std::invalid_argument("model must be gbm or heston");
+                }
             } else if (argument == "--payoff") {
                 const std::string payoff = require_value(argc, argv, index);
                 if (payoff == "european") {
@@ -165,8 +189,26 @@ int main(int argc, char** argv) {
                 spec.rate =
                     mc::parse_finite_double(require_value(argc, argv, index), "rate");
             } else if (argument == "--volatility") {
+                gbm_volatility_set = true;
                 spec.volatility = mc::parse_finite_double(
                     require_value(argc, argv, index), "volatility");
+            } else if (argument == "--heston-v0") {
+                heston_parameters().initial_variance = mc::parse_finite_double(
+                    require_value(argc, argv, index), "heston-v0");
+            } else if (argument == "--heston-kappa") {
+                heston_parameters().mean_reversion_rate =
+                    mc::parse_finite_double(
+                        require_value(argc, argv, index), "heston-kappa");
+            } else if (argument == "--heston-theta") {
+                heston_parameters().long_run_variance = mc::parse_finite_double(
+                    require_value(argc, argv, index), "heston-theta");
+            } else if (argument == "--heston-xi") {
+                heston_parameters().volatility_of_variance =
+                    mc::parse_finite_double(
+                        require_value(argc, argv, index), "heston-xi");
+            } else if (argument == "--heston-rho") {
+                heston_parameters().correlation = mc::parse_finite_double(
+                    require_value(argc, argv, index), "heston-rho");
             } else if (argument == "--maturity") {
                 spec.maturity = mc::parse_finite_double(
                     require_value(argc, argv, index), "maturity");
@@ -179,6 +221,11 @@ int main(int argc, char** argv) {
             throw std::invalid_argument(
                 "durable storage policy options require --run-dir");
         }
+        if (spec.model_type == mc::ModelType::Heston && gbm_volatility_set) {
+            throw std::invalid_argument(
+                "--volatility is GBM-only; use Heston variance parameters");
+        }
+        spec.validate();
 
         const auto started = std::chrono::steady_clock::now();
         std::optional<mc::DurableRunResult> durable_result;
@@ -235,6 +282,7 @@ int main(int argc, char** argv) {
                       << "  \"computed_scenarios\": "
                       << durable_result->computed_scenarios;
         }
+        const std::vector<mc::RunWarning> warnings = spec.warnings();
         std::cout << ",\n"
                   << "  \"model\": \"" << mc::to_string(spec.model_type) << "\",\n"
                   << "  \"payoff\": \"" << mc::to_string(spec.payoff_type) << "\",\n"
@@ -244,7 +292,44 @@ int main(int argc, char** argv) {
                   << "  \"block_size\": " << config.block_size << ",\n"
                   << "  \"workers_requested\": " << config.worker_count << ",\n"
                   << "  \"workers_used\": " << result.workers_used << ",\n"
-                  << "  \"antithetic\": " << (spec.antithetic ? "true" : "false") << ",\n"
+                  << "  \"antithetic\": " << (spec.antithetic ? "true" : "false") << ",\n";
+        if (spec.model_type == mc::ModelType::Heston) {
+            const double feller_ratio = spec.heston->feller_ratio();
+            std::cout << "  \"heston\": {\n"
+                      << "    \"discretization\": \"full_truncation_euler_log_asset_v"
+                      << spec.heston->discretization_version << "\",\n"
+                      << "    \"initial_variance\": "
+                      << spec.heston->initial_variance << ",\n"
+                      << "    \"mean_reversion_rate\": "
+                      << spec.heston->mean_reversion_rate << ",\n"
+                      << "    \"long_run_variance\": "
+                      << spec.heston->long_run_variance << ",\n"
+                      << "    \"volatility_of_variance\": "
+                      << spec.heston->volatility_of_variance << ",\n"
+                      << "    \"correlation\": "
+                      << spec.heston->correlation << ",\n"
+                      << "    \"feller_ratio\": ";
+            if (std::isfinite(feller_ratio)) {
+                std::cout << feller_ratio;
+            } else {
+                std::cout << "null";
+            }
+            std::cout << ",\n    \"feller_condition_satisfied\": "
+                      << (feller_ratio >= 1.0 ? "true" : "false")
+                      << "\n  },\n";
+        }
+        std::cout << "  \"warnings\": [";
+        for (std::size_t index = 0; index < warnings.size(); ++index) {
+            if (index != 0U) {
+                std::cout << ',';
+            }
+            const mc::RunWarning& warning = warnings[index];
+            std::cout << "{\"code\": \"" << mc::to_string(warning.code)
+                      << "\", \"observed_value\": " << warning.observed_value
+                      << ", \"threshold\": " << warning.threshold
+                      << ", \"message\": \"Feller ratio is below 1; expect elevated full-truncation discretization bias at this time step\"}";
+        }
+        std::cout << "],\n"
                   << "  \"price\": " << result.aggregate.mean << ",\n"
                   << "  \"standard_error\": ";
         if (standard_error.has_value()) {
@@ -271,7 +356,8 @@ int main(int argc, char** argv) {
                              : result.scenarios_processed) /
                          seconds;
 
-        if (spec.payoff_type == mc::PayoffType::EuropeanCall) {
+        if (spec.model_type == mc::ModelType::Gbm &&
+            spec.payoff_type == mc::PayoffType::EuropeanCall) {
             const double analytic = mc::black_scholes_call_price(
                 spec.spot, spec.strike, spec.rate, spec.volatility, spec.maturity);
             std::cout << ",\n  \"black_scholes_price\": " << analytic

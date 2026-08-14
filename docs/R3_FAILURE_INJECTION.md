@@ -45,7 +45,14 @@ Schema v2 intentionally rejects v1 descriptors. V1 did not protect the complete 
 
 Replay evidence is immutable. The target path must not exist when injection is configured, and installation uses a synced temporary inode followed by an atomic no-replace hard link, temporary-name removal, and parent-directory `fsync`. A reused path fails closed without modifying the earlier descriptor. Hard-link installation is covered by the same local-POSIX filesystem scope as the durable run store.
 
-Descriptor input is capped at 64 KiB, 64 fields, and 4 KiB per line. A normal v2 descriptor has 38 short fields and is far below these bounds; the limits leave substantial schema headroom while preventing a malformed CLI input from causing unbounded allocation. Hook traces are SHA-256-hashed incrementally in a fixed-size state. Each event is encoded into a temporary 25-byte buffer for one hash update, rather than accumulating approximately 100 bytes per completed block across the four result hooks.
+Descriptor input is capped at 64 KiB, 64 fields, and 4 KiB per line. A normal
+v2 descriptor has 38 short fields for GBM and 43 for the R5 Heston tagged
+payload, both far below these bounds; the limits leave substantial schema
+headroom while preventing malformed CLI input from causing unbounded
+allocation. Hook traces are SHA-256-hashed incrementally in a fixed-size state.
+Each event is encoded into a temporary 25-byte buffer for one hash update,
+rather than accumulating approximately 100 bytes per completed block across
+the four result hooks.
 
 Replay v2 intentionally requires one worker. Assignment order is deterministic, but completion order with multiple live workers is scheduled by the operating system and would make an occurrence-based trace nondeterministic. The normal runtime remains validated across worker counts; only the crash-trace harness is restricted. `deterministic_scheduler_seed` must be zero in v2; nonzero values are rejected until a scheduler capable of replaying controlled multi-worker completion order exists.
 
@@ -83,7 +90,8 @@ The seed is mapped through a pinned SplitMix64 transform to one of the nine poin
 5. reopening the complete run computes zero blocks;
 6. all nine failure points were covered by the overall matrix;
 7. the injection subprocess and combined clean/recovery/completed-reopen validation subprocess stay within the configured watchdog;
-8. larger matrices cover multiple block sizes, block counts, checkpoint intervals, queue modes, and a partial final block.
+8. larger matrices cover multiple block sizes, block counts, checkpoint
+   intervals, queue modes, GBM and Heston models, and a partial final block.
 
 The default watchdog is 30 seconds per matrix phase and may be changed up to one day.
 

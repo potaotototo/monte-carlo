@@ -10,6 +10,7 @@ LIB_SOURCES := \
 	src/identity.cpp \
 	src/metrics.cpp \
 	src/models/gbm.cpp \
+	src/models/heston.cpp \
 	src/parse.cpp \
 	src/persistence_codec.cpp \
 	src/rng/philox_rng.cpp \

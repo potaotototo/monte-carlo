@@ -240,7 +240,24 @@ RunSpec decode_run_spec_payload(const std::vector<std::uint8_t>& bytes) {
     spec.spot = reader.binary64();
     spec.strike = reader.binary64();
     spec.rate = reader.binary64();
-    spec.volatility = reader.binary64();
+    switch (spec.model_type) {
+        case ModelType::Gbm:
+            spec.volatility = reader.binary64();
+            break;
+        case ModelType::Heston: {
+            HestonParams heston;
+            heston.discretization_version = reader.u32();
+            heston.initial_variance = reader.binary64();
+            heston.mean_reversion_rate = reader.binary64();
+            heston.long_run_variance = reader.binary64();
+            heston.volatility_of_variance = reader.binary64();
+            heston.correlation = reader.binary64();
+            spec.heston = heston;
+            break;
+        }
+        default:
+            throw std::runtime_error("persisted RunSpec model is unsupported");
+    }
     reader.finish();
     spec.validate();
     return spec;

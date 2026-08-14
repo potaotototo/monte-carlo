@@ -170,9 +170,29 @@ std::string encode_descriptor_body(const ReplayDescriptor& descriptor) {
            << "maturity_bits=" << bits_hex(descriptor.spec.maturity) << '\n'
            << "spot_bits=" << bits_hex(descriptor.spec.spot) << '\n'
            << "strike_bits=" << bits_hex(descriptor.spec.strike) << '\n'
-           << "rate_bits=" << bits_hex(descriptor.spec.rate) << '\n'
-           << "volatility_bits=" << bits_hex(descriptor.spec.volatility) << '\n'
-           << "worker_count=" << descriptor.engine_config.worker_count << '\n'
+           << "rate_bits=" << bits_hex(descriptor.spec.rate) << '\n';
+    switch (descriptor.spec.model_type) {
+        case ModelType::Gbm:
+            stream << "volatility_bits="
+                   << bits_hex(descriptor.spec.volatility) << '\n';
+            break;
+        case ModelType::Heston:
+            stream << "heston_discretization_version="
+                   << descriptor.spec.heston->discretization_version << '\n'
+                   << "heston_initial_variance_bits="
+                   << bits_hex(descriptor.spec.heston->initial_variance) << '\n'
+                   << "heston_mean_reversion_rate_bits="
+                   << bits_hex(descriptor.spec.heston->mean_reversion_rate) << '\n'
+                   << "heston_long_run_variance_bits="
+                   << bits_hex(descriptor.spec.heston->long_run_variance) << '\n'
+                   << "heston_volatility_of_variance_bits="
+                   << bits_hex(descriptor.spec.heston->volatility_of_variance)
+                   << '\n'
+                   << "heston_correlation_bits="
+                   << bits_hex(descriptor.spec.heston->correlation) << '\n';
+            break;
+    }
+    stream << "worker_count=" << descriptor.engine_config.worker_count << '\n'
            << "block_size=" << descriptor.engine_config.block_size << '\n'
            << "assignment_queue_capacity="
            << descriptor.engine_config.assignment_queue_capacity << '\n'
@@ -619,8 +639,40 @@ ReplayDescriptor read_replay_descriptor(const std::filesystem::path& path) {
         parse_hex_u64(reader.take("strike_bits"), "strike_bits"));
     descriptor.spec.rate = std::bit_cast<double>(
         parse_hex_u64(reader.take("rate_bits"), "rate_bits"));
-    descriptor.spec.volatility = std::bit_cast<double>(
-        parse_hex_u64(reader.take("volatility_bits"), "volatility_bits"));
+    switch (descriptor.spec.model_type) {
+        case ModelType::Gbm:
+            descriptor.spec.volatility = std::bit_cast<double>(
+                parse_hex_u64(reader.take("volatility_bits"),
+                              "volatility_bits"));
+            break;
+        case ModelType::Heston: {
+            HestonParams heston;
+            heston.discretization_version = parse_u32(
+                reader.take("heston_discretization_version"),
+                "heston_discretization_version");
+            heston.initial_variance = std::bit_cast<double>(parse_hex_u64(
+                reader.take("heston_initial_variance_bits"),
+                "heston_initial_variance_bits"));
+            heston.mean_reversion_rate = std::bit_cast<double>(parse_hex_u64(
+                reader.take("heston_mean_reversion_rate_bits"),
+                "heston_mean_reversion_rate_bits"));
+            heston.long_run_variance = std::bit_cast<double>(parse_hex_u64(
+                reader.take("heston_long_run_variance_bits"),
+                "heston_long_run_variance_bits"));
+            heston.volatility_of_variance = std::bit_cast<double>(
+                parse_hex_u64(
+                    reader.take("heston_volatility_of_variance_bits"),
+                    "heston_volatility_of_variance_bits"));
+            heston.correlation = std::bit_cast<double>(parse_hex_u64(
+                reader.take("heston_correlation_bits"),
+                "heston_correlation_bits"));
+            descriptor.spec.heston = heston;
+            break;
+        }
+        default:
+            throw std::runtime_error(
+                "replay descriptor contains an unsupported model type");
+    }
     descriptor.engine_config.worker_count = parse_size(
         reader.take("worker_count"), "worker_count");
     descriptor.engine_config.block_size =

@@ -57,6 +57,10 @@ struct RunMetadata {
     Sha256Digest execution_layout_hash{};
     Sha256Digest build_fingerprint{};
     std::string build_description;
+
+    [[nodiscard]] std::vector<RunWarning> warnings() const {
+        return spec.warnings();
+    }
 };
 
 struct DurableBlockRecord {

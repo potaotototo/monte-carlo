@@ -73,8 +73,9 @@ private:
     MetricsClock::time_point started_;
 };
 
-AggregateStats compute_block_with_kernel(const GbmKernel& kernel,
-                                         const ScenarioBlock& block) {
+template <typename Kernel>
+AggregateStats compute_block_with_concrete_kernel(const Kernel& kernel,
+                                                  const ScenarioBlock& block) {
     const RunSpec& spec = kernel.spec();
     if (block.start_scenario >= block.end_scenario ||
         block.end_scenario > spec.total_scenarios) {
@@ -101,6 +102,13 @@ AggregateStats compute_block_with_kernel(const GbmKernel& kernel,
         aggregate.add(kernel.discounted_payoff(scenario));
     }
     return aggregate;
+}
+
+AggregateStats compute_block_with_kernel(const ModelKernel& kernel,
+                                         const ScenarioBlock& block) {
+    return kernel.visit([&block](const auto& concrete_kernel) {
+        return compute_block_with_concrete_kernel(concrete_kernel, block);
+    });
 }
 
 std::size_t execute_missing_blocks(
@@ -180,7 +188,7 @@ std::size_t execute_missing_blocks(
             workers.emplace_back([&, worker_index] {
                 WorkerMetrics worker_metrics;
                 try {
-                    const GbmKernel kernel(spec);
+                    const ModelKernel kernel(spec);
                     ScenarioBlock block;
                     for (;;) {
                         std::uint64_t blocked_ns = 0U;
@@ -427,7 +435,7 @@ std::vector<ScenarioBlock> make_blocks(const RunSpec& spec,
 }
 
 AggregateStats compute_block(const RunSpec& spec, const ScenarioBlock& block) {
-    return compute_block_with_kernel(GbmKernel(spec), block);
+    return compute_block_with_kernel(ModelKernel(spec), block);
 }
 
 AggregateStats reduce_block_results(const std::vector<AggregateStats>& leaves) {

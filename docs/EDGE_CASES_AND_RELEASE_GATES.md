@@ -1,6 +1,10 @@
 # Edge cases, rationale, and release gates
 
-This document records boundary conditions found during the R1.5/R2 audits and their resolution through R3. The durable implementation is described in `R2_DURABLE_RECOVERY.md`; deterministic process-crash validation is described in `R3_FAILURE_INJECTION.md`.
+This document records boundary conditions found during the R1.5/R2 audits and
+their resolution through R5. The durable implementation is described in
+`R2_DURABLE_RECOVERY.md`; deterministic process-crash validation is described
+in `R3_FAILURE_INJECTION.md`; and the Heston discretization contract is in
+`R5_HESTON.md`.
 
 ## Status summary
 
@@ -17,6 +21,9 @@ This document records boundary conditions found during the R1.5/R2 audits and th
 | Extreme model parameters | Derived constants and every path step are checked contextually | Overflow and underflow fail closed | Complete |
 | Crash handling | Atomic full manifests plus nine replayable process-crash hooks and immutable schema-v2 evidence | Power-loss/filesystem fault harness remains outside scope | R3 complete |
 | Runtime metrics | Opt-in monotonic timings, bounded queue peaks, and durable stage counters | Scheduling perturbation and missing recovered-block samples are explicit | R4 phase 1 complete |
+| Heston variance | Full-truncation Euler uses `max(v,0)` without rewriting the stored state | Discretization version is pinned and non-finite paths fail with context | R5 phase 1 complete |
+| Feller violation | Valid run with a structured ratio warning below 1 | Bias risk remains visible in CLI and recovered metadata | R5 phase 1 complete |
+| Multi-driver RNG | Heston uses fixed dimensions 0 and 1, then explicit correlation | Built-in smoke passes; external SmallCrush/PractRand remains a release gate | R5 phase 2 |
 
 ## 1. Uniform precision and why binary64 calls for 53 random bits
 
@@ -238,6 +245,15 @@ The GBM kernel now precomputes and validates:
 
 Worker errors include scenario ID and time step. A zero path price is rejected because GBM is strictly positive mathematically, so numerical underflow cannot silently become a valid zero payoff.
 
+Heston applies the same fail-closed policy to its derived time-step scales,
+discount factor, asset exponent, price, variance state, and Asian running sum.
+A negative variance state is not itself an error: full truncation deliberately
+uses `max(v,0)` in the next update. Treating every negative Euler state as a
+failed path would silently turn the documented discretization into a different
+algorithm. Correlation endpoints `-1` and `1`, zero volatility of variance, and
+zero initial or long-run variance are valid limiting cases rather than divide-
+by-zero errors.
+
 ## 10. R2 completion checklist
 
 The durable schema is pinned by the following completed gates:
@@ -274,7 +290,12 @@ Replay descriptors are debugging evidence, so they must not silently drift or be
 
 Descriptor paths are single-assignment. Configuration rejects an existing path, while installation independently uses a synced temporary inode and an atomic no-replace hard link to close the check/install race. Reusing a path fails without changing the original evidence. This decision favors forensic preservation over a convenient overwrite mode; callers that want another sample must choose a unique path.
 
-A generated v2 descriptor has 38 short ordered fields. The reader allows 64 KiB total, 64 fields, and 4 KiB per line, providing ample format headroom without allowing arbitrary CLI input to drive unbounded allocation. Trace events are fed incrementally into SHA-256 through a temporary 25-byte encoding, so choosing a late occurrence does not retain the entire hook history in memory.
+A generated v2 descriptor has 38 short ordered fields for GBM and 43 for
+Heston. The reader allows 64 KiB total, 64 fields, and 4 KiB per line,
+providing ample format headroom without allowing arbitrary CLI input to drive
+unbounded allocation. Trace events are fed incrementally into SHA-256 through a
+temporary 25-byte encoding, so choosing a late occurrence does not retain the
+entire hook history in memory.
 
 `deterministic_scheduler_seed` remains reserved and must be zero. Accepting a nonzero value before a controlled multi-worker scheduler exists would record an input that has no effect and create a false replay claim.
 

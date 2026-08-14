@@ -147,7 +147,7 @@ double GbmKernel::antithetic_pair_mean(std::uint64_t even_scenario_id) const {
 }
 
 double simulate_discounted_payoff(const RunSpec& spec, std::uint64_t scenario_id) {
-    return GbmKernel(spec).discounted_payoff(scenario_id);
+    return ModelKernel(spec).discounted_payoff(scenario_id);
 }
 
 double black_scholes_call_price(double spot,

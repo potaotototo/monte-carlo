@@ -68,6 +68,22 @@ MatrixCase make_case(std::uint64_t failure_seed,
         (topology & 1U) == 0U ? mc::PayoffType::EuropeanCall
                               : mc::PayoffType::AsianCall;
     test_case.spec.antithetic = (topology & 2U) != 0U;
+    if ((topology & 4U) != 0U) {
+        test_case.spec.model_type = mc::ModelType::Heston;
+        test_case.spec.heston.emplace();
+        // Keep matrix parameters bounded but varied enough to cover both
+        // Feller-satisfying and warning-producing Heston specifications.
+        test_case.spec.heston->initial_variance =
+            0.02 + 0.01 * static_cast<double>((topology >> 4U) % 4U);
+        test_case.spec.heston->mean_reversion_rate =
+            0.75 + 0.25 * static_cast<double>((topology >> 6U) % 5U);
+        test_case.spec.heston->long_run_variance =
+            0.03 + 0.01 * static_cast<double>((topology >> 9U) % 4U);
+        test_case.spec.heston->volatility_of_variance =
+            0.2 + 0.1 * static_cast<double>((topology >> 11U) % 4U);
+        test_case.spec.heston->correlation =
+            -0.8 + 0.2 * static_cast<double>((topology >> 14U) % 9U);
+    }
     test_case.engine_config.worker_count = 1U;
     test_case.engine_config.block_size = block_sizes[static_cast<std::size_t>(
         (topology >> 12U) % block_sizes.size())];
@@ -284,6 +300,7 @@ int main(int argc, char** argv) {
         std::set<std::uint64_t> covered_checkpoint_intervals;
         std::set<std::size_t> covered_assignment_capacities;
         std::set<std::size_t> covered_completion_capacities;
+        std::set<mc::ModelType> covered_models;
         bool covered_partial_final_block = false;
 
         for (std::uint64_t index = 0; index < iterations; ++index) {
@@ -305,6 +322,7 @@ int main(int argc, char** argv) {
                 test_case.engine_config.assignment_queue_capacity);
             covered_completion_capacities.insert(
                 test_case.engine_config.completion_queue_capacity);
+            covered_models.insert(test_case.spec.model_type);
             covered_partial_final_block =
                 covered_partial_final_block ||
                 test_case.spec.total_scenarios %
@@ -370,6 +388,7 @@ int main(int argc, char** argv) {
                   << covered_assignment_capacities.size()
                   << " completion_capacities="
                   << covered_completion_capacities.size()
+                  << " models=" << covered_models.size()
                   << " partial_final_block="
                   << (covered_partial_final_block ? "yes" : "no") << '\n';
         const bool topology_coverage_ok =
@@ -379,6 +398,7 @@ int main(int argc, char** argv) {
              covered_checkpoint_intervals.size() >= 2U &&
              covered_assignment_capacities.size() >= 2U &&
              covered_completion_capacities.size() >= 2U &&
+             covered_models.size() == 2U &&
              covered_partial_final_block);
         if (coverage != mc::kFailurePoints.size()) {
             std::cerr << "crash matrix did not cover every failure point\n";

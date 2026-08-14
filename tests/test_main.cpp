@@ -117,6 +117,23 @@ mc::RunSpec r3_test_spec() {
     return spec;
 }
 
+mc::RunSpec heston_test_spec() {
+    mc::RunSpec spec;
+    spec.model_type = mc::ModelType::Heston;
+    spec.heston.emplace();
+    spec.global_seed = 0x484553544F4EULL;
+    spec.total_scenarios = 4'096U;
+    spec.num_time_steps = 16U;
+    return spec;
+}
+
+mc::RunSpec heston_replay_test_spec() {
+    mc::RunSpec spec = heston_test_spec();
+    spec.total_scenarios = 256U;
+    spec.num_time_steps = 4U;
+    return spec;
+}
+
 mc::EngineConfig r3_test_engine_config() {
     mc::EngineConfig config;
     // A single worker makes the hook trace itself deterministic. The runtime
@@ -136,10 +153,14 @@ mc::RunStoreConfig r3_test_store_config(
 }
 
 int run_r3_crash_child(int argc, char** argv) {
-    if (argc != 7) {
+    if (argc != 7 && argc != 8) {
         return 96;
     }
     try {
+        const bool use_heston = argc == 8 && std::string_view(argv[7]) == "heston";
+        if (argc == 8 && !use_heston) {
+            return 96;
+        }
         mc::RunStoreConfig store_config = r3_test_store_config(argv[2]);
         mc::FailureInjectionConfig injection;
         injection.replay_descriptor_path = argv[3];
@@ -149,7 +170,8 @@ int run_r3_crash_child(int argc, char** argv) {
         injection.failure_seed = mc::parse_u64(argv[6], "failure_seed");
         store_config.failure_injection = injection;
         static_cast<void>(mc::run_parallel_durable(
-            r3_test_spec(), r3_test_engine_config(), store_config));
+            use_heston ? heston_replay_test_spec() : r3_test_spec(),
+            r3_test_engine_config(), store_config));
         return 95;
     } catch (const std::exception& error) {
         std::cerr << "R3 crash child failed before injection: "
@@ -164,7 +186,8 @@ int spawn_r3_crash_child_status(
     mc::FailurePoint point,
     std::uint64_t occurrence,
     std::uint64_t failure_seed,
-    bool suppress_errors = false) {
+    bool suppress_errors = false,
+    bool use_heston = false) {
     const std::string occurrence_text = std::to_string(occurrence);
     const std::string seed_text = std::to_string(failure_seed);
     const std::string executable_text = test_executable.string();
@@ -183,11 +206,19 @@ int spawn_r3_crash_child_status(
                 static_cast<void>(::close(null_descriptor));
             }
         }
-        ::execl(executable_text.c_str(), executable_text.c_str(),
-                "--r3-crash-child", run_text.c_str(),
-                descriptor_text.c_str(), point_text.c_str(),
-                occurrence_text.c_str(), seed_text.c_str(),
-                static_cast<char*>(nullptr));
+        if (use_heston) {
+            ::execl(executable_text.c_str(), executable_text.c_str(),
+                    "--r3-crash-child", run_text.c_str(),
+                    descriptor_text.c_str(), point_text.c_str(),
+                    occurrence_text.c_str(), seed_text.c_str(), "heston",
+                    static_cast<char*>(nullptr));
+        } else {
+            ::execl(executable_text.c_str(), executable_text.c_str(),
+                    "--r3-crash-child", run_text.c_str(),
+                    descriptor_text.c_str(), point_text.c_str(),
+                    occurrence_text.c_str(), seed_text.c_str(),
+                    static_cast<char*>(nullptr));
+        }
         ::_exit(127);
     }
     return mc::tool::wait_for_child(
@@ -198,9 +229,11 @@ void spawn_r3_crash_child(const std::filesystem::path& run_directory,
                           const std::filesystem::path& descriptor_path,
                           mc::FailurePoint point,
                           std::uint64_t occurrence,
-                          std::uint64_t failure_seed) {
+                          std::uint64_t failure_seed,
+                          bool use_heston = false) {
     check(spawn_r3_crash_child_status(run_directory, descriptor_path, point,
-                                      occurrence, failure_seed) ==
+                                      occurrence, failure_seed, false,
+                                      use_heston) ==
               mc::kFailureInjectionExitCode,
           "R3 child did not terminate at the selected failure point");
 }
@@ -587,6 +620,285 @@ void fused_antithetic_pair_preserves_estimator() {
         0.5 * (kernel.discounted_payoff(20) + kernel.discounted_payoff(21));
     check_near(kernel.antithetic_pair_mean(20), unfused, 1e-15,
                "fused antithetic path changed the pair-mean estimator");
+}
+
+void heston_run_spec_identity_and_warnings() {
+    mc::RunSpec missing;
+    missing.model_type = mc::ModelType::Heston;
+    check_throws([&] { missing.validate(); },
+                 "Heston RunSpec accepted a missing parameter payload");
+
+    mc::RunSpec unexpected;
+    unexpected.heston.emplace();
+    check_throws([&] { unexpected.validate(); },
+                 "GBM RunSpec accepted inactive Heston parameters");
+
+    mc::RunSpec spec = heston_test_spec();
+    spec.heston->mean_reversion_rate = 1.0;
+    spec.heston->long_run_variance = 0.04;
+    spec.heston->volatility_of_variance = 0.5;
+    spec.validate();
+    const std::vector<mc::RunWarning> warnings = spec.warnings();
+    check(warnings.size() == 1U &&
+              warnings.front().code ==
+                  mc::RunWarningCode::HestonFellerConditionViolated &&
+              warnings.front().observed_value < warnings.front().threshold,
+          "Feller violation did not produce structured RunSpec metadata");
+
+    const mc::Sha256Digest original_hash = mc::run_spec_hash(spec);
+    mc::RunSpec changed = spec;
+    changed.heston->correlation = -0.25;
+    check(mc::run_spec_hash(changed) != original_hash,
+          "active Heston parameter did not change stochastic identity");
+    changed = spec;
+    changed.volatility = 0.9;
+    check(mc::run_spec_hash(changed) == original_hash,
+          "inactive GBM volatility changed a Heston stochastic identity");
+
+    changed = spec;
+    changed.heston->correlation = 1.0001;
+    check_throws([&] { changed.validate(); },
+                 "Heston accepted correlation outside [-1,1]");
+    changed = spec;
+    changed.heston->initial_variance = -0.01;
+    check_throws([&] { changed.validate(); },
+                 "Heston accepted negative initial variance");
+    changed = spec;
+    changed.heston->mean_reversion_rate = -0.01;
+    check_throws([&] { changed.validate(); },
+                 "Heston accepted negative mean reversion");
+    changed = spec;
+    changed.heston->long_run_variance = -0.01;
+    check_throws([&] { changed.validate(); },
+                 "Heston accepted negative long-run variance");
+    changed = spec;
+    changed.heston->volatility_of_variance = -0.01;
+    check_throws([&] { changed.validate(); },
+                 "Heston accepted negative volatility of variance");
+    changed = spec;
+    changed.heston->correlation =
+        std::numeric_limits<double>::quiet_NaN();
+    check_throws([&] { changed.validate(); },
+                 "Heston accepted a non-finite correlation");
+    changed = spec;
+    ++changed.heston->discretization_version;
+    check_throws([&] { changed.validate(); },
+                 "Heston accepted an unpinned discretization version");
+
+    changed = spec;
+    changed.heston->volatility_of_variance = 0.0;
+    check(changed.warnings().empty() &&
+              std::isinf(changed.heston->feller_ratio()),
+          "zero volatility of variance mishandled the Feller condition");
+
+    mc::EngineConfig config;
+    config.block_size = 256U;
+    const mc::BuildIdentity build = mc::current_build_identity();
+    mc::RunMetadata metadata;
+    metadata.spec = spec;
+    metadata.block_size = config.block_size;
+    metadata.block_count =
+        1U + (spec.total_scenarios - 1U) / config.block_size;
+    metadata.run_spec_hash = original_hash;
+    metadata.execution_layout_hash = mc::execution_layout_hash(spec, config);
+    metadata.build_fingerprint = build.hash;
+    metadata.build_description = build.description;
+    metadata.run_id = mc::durable_run_id(metadata.run_spec_hash,
+                                         metadata.execution_layout_hash);
+    const mc::RunMetadata decoded =
+        mc::decode_run_metadata(mc::encode_run_metadata(metadata));
+    check(decoded.spec.heston.has_value() &&
+              decoded.spec.heston->correlation == spec.heston->correlation &&
+              decoded.run_spec_hash == original_hash &&
+              decoded.warnings().size() == 1U,
+          "durable Heston metadata lost parameters, identity, or warnings");
+}
+
+void heston_rng_dimension_smoke() {
+    constexpr std::uint64_t samples = 65'536U;
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_xx = 0.0;
+    double sum_yy = 0.0;
+    double sum_xy = 0.0;
+    for (std::uint64_t scenario = 0U; scenario < samples; ++scenario) {
+        const double x = mc::standard_normal(0xD1A3E510ULL, scenario, 0U, 0U);
+        const double y = mc::standard_normal(0xD1A3E510ULL, scenario, 0U, 1U);
+        sum_x += x;
+        sum_y += y;
+        sum_xx += x * x;
+        sum_yy += y * y;
+        sum_xy += x * y;
+    }
+    const double count = static_cast<double>(samples);
+    const double mean_x = sum_x / count;
+    const double mean_y = sum_y / count;
+    const double variance_x = sum_xx / count - mean_x * mean_x;
+    const double variance_y = sum_yy / count - mean_y * mean_y;
+    const double covariance = sum_xy / count - mean_x * mean_y;
+    const double correlation =
+        covariance / std::sqrt(variance_x * variance_y);
+    check(std::abs(mean_x) < 0.02 && std::abs(mean_y) < 0.02 &&
+              variance_x > 0.95 && variance_x < 1.05 &&
+              variance_y > 0.95 && variance_y < 1.05 &&
+              std::abs(correlation) < 0.02,
+          "Heston RNG dimensions failed the deterministic moment/correlation smoke test");
+}
+
+void heston_constant_variance_matches_gbm_limit() {
+    mc::RunSpec gbm;
+    gbm.global_seed = 0xC01157A7ULL;
+    gbm.total_scenarios = 256U;
+    gbm.num_time_steps = 16U;
+    gbm.volatility = 0.25;
+
+    mc::RunSpec heston = gbm;
+    heston.model_type = mc::ModelType::Heston;
+    heston.heston.emplace();
+    heston.heston->initial_variance = gbm.volatility * gbm.volatility;
+    heston.heston->long_run_variance = heston.heston->initial_variance;
+    heston.heston->mean_reversion_rate = 1.0;
+    heston.heston->volatility_of_variance = 0.0;
+    heston.heston->correlation = -0.8;
+
+    for (const mc::PayoffType payoff :
+         {mc::PayoffType::EuropeanCall, mc::PayoffType::AsianCall}) {
+        gbm.payoff_type = payoff;
+        heston.payoff_type = payoff;
+        const mc::GbmKernel gbm_kernel(gbm);
+        const mc::HestonKernel heston_kernel(heston);
+        for (std::uint64_t scenario = 0U; scenario < gbm.total_scenarios;
+             ++scenario) {
+            check_near(heston_kernel.discounted_payoff(scenario),
+                       gbm_kernel.discounted_payoff(scenario), 2.0e-12,
+                       "constant-variance Heston diverged from the GBM limit");
+        }
+    }
+}
+
+void heston_determinism_and_antithetics() {
+    mc::RunSpec spec = heston_test_spec();
+    spec.payoff_type = mc::PayoffType::AsianCall;
+    mc::EngineConfig config;
+    config.worker_count = 1U;
+    config.block_size = 256U;
+    config.assignment_queue_capacity = 1U;
+    config.completion_queue_capacity = 1U;
+    const mc::RunResult reference = mc::run_parallel(spec, config);
+    for (const std::size_t workers : {2U, 4U, 8U}) {
+        config.worker_count = workers;
+        check_aggregate_exact(mc::run_parallel(spec, config).aggregate,
+                              reference.aggregate,
+                              "Heston aggregate changed with worker count");
+    }
+
+    spec.antithetic = true;
+    const mc::HestonKernel kernel(spec);
+    const double unfused = 0.5 *
+        (kernel.discounted_payoff(20U) + kernel.discounted_payoff(21U));
+    check_near(kernel.antithetic_pair_mean(20U), unfused, 1.0e-15,
+               "fused Heston antithetic path changed the estimator");
+    config.worker_count = 1U;
+    const mc::RunResult paired_reference = mc::run_parallel(spec, config);
+    check(paired_reference.aggregate.n == spec.total_scenarios / 2U,
+          "Heston antithetic observations were not pair means");
+    config.worker_count = 4U;
+    check_aggregate_exact(mc::run_parallel(spec, config).aggregate,
+                          paired_reference.aggregate,
+                          "antithetic Heston aggregate changed with workers");
+}
+
+void heston_durable_recovery_round_trip() {
+    TemporaryDirectory directory;
+    mc::RunSpec spec = heston_test_spec();
+    spec.total_scenarios = 2'048U;
+    mc::EngineConfig config;
+    config.worker_count = 4U;
+    config.block_size = 256U;
+    const mc::RunResult clean = mc::run_parallel(spec, config);
+    mc::RunStoreConfig store_config;
+    store_config.run_directory = directory.path() / "heston-run";
+    store_config.checkpoint_interval_blocks = 2U;
+    store_config.min_free_space_bytes = 0U;
+    const mc::DurableRunResult completed =
+        mc::run_parallel_durable(spec, config, store_config);
+    check_aggregate_exact(completed.run_result.aggregate, clean.aggregate,
+                          "durable Heston result differed from clean execution");
+    const mc::DurableRunResult reopened =
+        mc::run_parallel_durable(spec, config, store_config);
+    check(reopened.recovered_blocks == completed.run_result.block_count &&
+              reopened.computed_blocks == 0U,
+          "completed Heston recovery recomputed committed blocks");
+    check_aggregate_exact(reopened.run_result.aggregate, clean.aggregate,
+                          "reopened Heston aggregate changed");
+}
+
+void heston_descriptor_driven_crash_replay() {
+    TemporaryDirectory directory;
+    const std::filesystem::path first_run = directory.path() / "first-run";
+    const std::filesystem::path descriptor_path =
+        directory.path() / "heston.replay";
+    spawn_r3_crash_child(
+        first_run, descriptor_path, mc::FailurePoint::ResultAfterRename,
+        1U, 0xA5A5U, true);
+    const mc::ReplayDescriptor replay =
+        mc::read_replay_descriptor(descriptor_path);
+    const mc::RunSpec expected_spec = heston_replay_test_spec();
+    check(replay.spec.model_type == mc::ModelType::Heston &&
+              replay.spec.heston.has_value() &&
+              replay.spec.heston->correlation ==
+                  expected_spec.heston->correlation &&
+              replay.run_spec_hash == mc::run_spec_hash(expected_spec),
+          "Heston replay descriptor lost its tagged model identity");
+
+    const std::filesystem::path replay_run = directory.path() / "replay-run";
+    const std::filesystem::path observed_path =
+        directory.path() / "heston-observed.replay";
+    const pid_t child = ::fork();
+    if (child < 0) {
+        throw TestFailure("could not fork Heston descriptor replay child");
+    }
+    if (child == 0) {
+        try {
+            mc::RunStoreConfig store_config;
+            store_config.run_directory = replay_run;
+            store_config.checkpoint_interval_blocks =
+                replay.checkpoint_interval_blocks;
+            store_config.max_storage_bytes = replay.max_storage_bytes;
+            store_config.max_storage_files = replay.max_storage_files;
+            store_config.min_free_space_bytes = replay.min_free_space_bytes;
+            store_config.max_manifest_bytes = replay.max_manifest_bytes;
+            mc::FailureInjectionConfig injection = replay.injection;
+            injection.replay_descriptor_path = observed_path;
+            store_config.failure_injection = injection;
+            static_cast<void>(mc::run_parallel_durable(
+                replay.spec, replay.engine_config, store_config));
+            ::_exit(95);
+        } catch (...) {
+            ::_exit(94);
+        }
+    }
+    check(mc::tool::wait_for_child(
+              child, std::chrono::seconds{30}, "Heston descriptor replay") ==
+              mc::kFailureInjectionExitCode,
+          "descriptor-driven Heston replay missed the recorded crash point");
+    const mc::ReplayDescriptor observed =
+        mc::read_replay_descriptor(observed_path);
+    check(observed.run_spec_hash == replay.run_spec_hash &&
+              observed.observed_trace_hash == replay.observed_trace_hash &&
+              observed.observed_trace_events == replay.observed_trace_events &&
+              observed.run_incarnation == replay.run_incarnation &&
+              observed.block_id == replay.block_id &&
+              observed.checkpoint_sequence == replay.checkpoint_sequence,
+          "descriptor-driven Heston replay changed its crash identity");
+
+    const mc::RunResult clean =
+        mc::run_parallel(expected_spec, r3_test_engine_config());
+    mc::RunStoreConfig recovery = r3_test_store_config(first_run);
+    const mc::DurableRunResult recovered = mc::run_parallel_durable(
+        expected_spec, r3_test_engine_config(), recovery);
+    check_aggregate_exact(recovered.run_result.aggregate, clean.aggregate,
+                          "crash-recovered Heston aggregate changed");
 }
 
 mc::BlockResult valid_result(const mc::RunSpec& spec,
@@ -1818,6 +2130,15 @@ void numerical_parameter_guards() {
                 std::numeric_limits<double>::infinity(), 100.0, 0.05, 0.2, 1.0));
         },
         "Black-Scholes accepted an infinite input");
+
+    mc::RunSpec heston = heston_test_spec();
+    heston.rate = 0.0;
+    heston.maturity = 2.0;
+    heston.num_time_steps = 1U;
+    heston.heston->initial_variance =
+        std::numeric_limits<double>::max();
+    check_throws([&] { static_cast<void>(mc::HestonKernel(heston)); },
+                 "Heston accepted an overflowing initial time-step scale");
 }
 
 void golden_block_payloads() {
@@ -1885,6 +2206,17 @@ int main(int argc, char** argv) {
         {"antithetic_pair_means_reduce_error", antithetic_pair_means_reduce_error},
         {"fused_antithetic_pair_preserves_estimator",
          fused_antithetic_pair_preserves_estimator},
+        {"heston_run_spec_identity_and_warnings",
+         heston_run_spec_identity_and_warnings},
+        {"heston_rng_dimension_smoke", heston_rng_dimension_smoke},
+        {"heston_constant_variance_matches_gbm_limit",
+         heston_constant_variance_matches_gbm_limit},
+        {"heston_determinism_and_antithetics",
+         heston_determinism_and_antithetics},
+        {"heston_durable_recovery_round_trip",
+         heston_durable_recovery_round_trip},
+        {"heston_descriptor_driven_crash_replay",
+         heston_descriptor_driven_crash_replay},
         {"durable_codec_contract", durable_codec_contract},
         {"durable_recovery_exactly_once", durable_recovery_exactly_once},
         {"durable_corruption_falls_back_to_previous_manifest",

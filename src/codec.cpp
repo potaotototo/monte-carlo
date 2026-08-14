@@ -42,7 +42,7 @@ void append_digest(std::vector<std::uint8_t>& bytes,
 std::vector<std::uint8_t> encode_run_spec_payload(const RunSpec& spec) {
     spec.validate();
     std::vector<std::uint8_t> bytes;
-    bytes.reserve(88U);
+    bytes.reserve(spec.model_type == ModelType::Heston ? 128U : 88U);
     append_u32(bytes, kRunSpecSchemaVersion);
     append_u64(bytes, spec.engine_version);
     append_u64(bytes, spec.rng_version);
@@ -58,7 +58,22 @@ std::vector<std::uint8_t> encode_run_spec_payload(const RunSpec& spec) {
     append_double(bytes, spec.spot);
     append_double(bytes, spec.strike);
     append_double(bytes, spec.rate);
-    append_double(bytes, spec.volatility);
+    // Schema v1 is a tagged payload: the common prefix is followed by exactly
+    // one model-specific tail. Keeping the GBM tail byte-for-byte unchanged
+    // preserves existing GBM run hashes and durable stores.
+    switch (spec.model_type) {
+        case ModelType::Gbm:
+            append_double(bytes, spec.volatility);
+            break;
+        case ModelType::Heston:
+            append_u32(bytes, spec.heston->discretization_version);
+            append_double(bytes, spec.heston->initial_variance);
+            append_double(bytes, spec.heston->mean_reversion_rate);
+            append_double(bytes, spec.heston->long_run_variance);
+            append_double(bytes, spec.heston->volatility_of_variance);
+            append_double(bytes, spec.heston->correlation);
+            break;
+    }
     return bytes;
 }
 

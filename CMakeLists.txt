@@ -15,6 +15,7 @@ set(MC_RUNTIME_SOURCES
     src/identity.cpp
     src/metrics.cpp
     src/models/gbm.cpp
+    src/models/heston.cpp
     src/parse.cpp
     src/persistence_codec.cpp
     src/rng/philox_rng.cpp
@@ -104,6 +105,10 @@ if(BUILD_TESTING)
              --max-workers 257)
     add_test(NAME run_crash_matrix_help COMMAND run_crash_matrix --help)
     add_test(NAME replay_failure_help COMMAND replay_failure --help)
+    add_test(NAME run_simulation_heston_smoke COMMAND run_simulation
+             --model heston --heston-kappa 1 --heston-theta 0.04
+             --heston-xi 0.5 --heston-rho -0.7 --steps 4
+             --scenarios 128 --workers 2 --block-size 64)
     # Launch by a bare name through PATH so the persistence tool's crash-child
     # self-exec path is covered, not only CTest's resolved target path.
     add_test(NAME benchmark_persistence_smoke
@@ -128,6 +133,8 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION "Usage: run_crash_matrix")
     set_tests_properties(replay_failure_help PROPERTIES
         PASS_REGULAR_EXPRESSION "Usage: replay_failure")
+    set_tests_properties(run_simulation_heston_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION "heston_feller_condition_violated")
     set_tests_properties(benchmark_persistence_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION
             "crash_recovery_open_ns,recovery_computed_scenarios,recomputed_scenarios_after_crash"

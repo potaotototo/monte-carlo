@@ -1,10 +1,12 @@
 # Fault-Tolerant Parallel Monte Carlo Runtime
 
-This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime plus R4 observability and benchmark tooling: a validated GBM pricer, deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, replayable process-crash harness, opt-in runtime/persistence metrics, and repeatable compute, aggregation, checkpoint, and recovery sweeps.
+This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime plus R4 observability/benchmark tooling and R5 phase-1 Heston support: validated GBM and stochastic-volatility pricers, a deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, replayable process-crash harness, opt-in runtime/persistence metrics, and repeatable compute, aggregation, checkpoint, and recovery sweeps.
 
 ## What works now
 
 - European and arithmetic Asian call pricing under risk-neutral GBM.
+- European and arithmetic Asian call pricing under Heston stochastic
+  volatility with pinned full-truncation Euler/log-asset discretization.
 - Black–Scholes closed-form pricing as the European-option correctness oracle.
 - Random123 Philox4x32-10 with a known-answer test.
 - Versioned RNG counter layout: 40-bit scenario ID, 24-bit time step, 8-bit dimension, and 24-bit draw index.
@@ -15,6 +17,8 @@ This repository implements the project described in the supplied technical plan 
 - Identical block aggregates and final results across worker counts in the pinned build.
 - Antithetic variates accumulated as pair-means rather than incorrectly treated as independent raw payoffs.
 - Run-invariant GBM constants compiled once per worker and fused antithetic pair simulation that shares RNG work.
+- Two fixed Philox dimensions for Heston's correlated drivers, structured
+  Feller warnings, and fused two-driver antithetic pairs.
 - Canonical little-endian run/statistics payloads with IEEE-754 float encoding and SHA-256 identities.
 - Pure coordinator validation for duplicates, stale leases/incarnations, corruption, schema mismatches, and deterministic conflicts.
 - Separate stochastic, execution-layout, and build identities for recovery compatibility.
@@ -68,6 +72,25 @@ Run a daily-monitored arithmetic Asian call with antithetic variates:
   --block-size 2048 \
   --antithetic
 ```
+
+Run a Heston European call (default parameters shown explicitly):
+
+```sh
+./build/run_simulation \
+  --model heston \
+  --heston-v0 0.04 \
+  --heston-kappa 1.5 \
+  --heston-theta 0.04 \
+  --heston-xi 0.3 \
+  --heston-rho -0.7 \
+  --steps 252 \
+  --scenarios 200000 \
+  --workers 8
+```
+
+The JSON output includes the discretization version, Feller ratio, and a
+structured warning when the ratio is below one. Such a run is valid, but the
+warning indicates elevated full-truncation discretization-bias risk.
 
 Enable durable checkpoints and resume by rerunning the same command:
 
@@ -132,7 +155,7 @@ With antithetic mode enabled, scenario IDs `(2j, 2j+1)` use opposite shocks and 
 ```text
 include/mc/       public runtime interfaces
 src/rng/          Philox and inverse-normal implementation
-src/models/       GBM path and payoff evaluation
+src/models/       GBM and Heston path/payoff evaluation
 src/aggregation/  Welford updates and pairwise merge
 src/runtime/      scheduler/worker/coordinator execution path
 src/metrics.cpp   opt-in R4 latency summaries and reset contract
@@ -154,7 +177,7 @@ docs/             phased implementation notes
 | R2 | Durable block results, atomic manifests, and restart recovery | Complete |
 | R3 | Deterministic crash injection and replay descriptors | Complete |
 | R4 | Synchronization, coordinator, persistence, and recovery benchmarks | Phase 2 implemented; 8-worker efficiency gate open |
-| R5 | Heston or another advanced risk/model extension | Planned |
+| R5 | Deterministic Heston stochastic volatility | Phase 1 implemented; independent price grid and external RNG battery open |
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the phased handoff and acceptance evidence.
 The durable file, commit, and recovery contract is specified in [docs/R2_DURABLE_RECOVERY.md](docs/R2_DURABLE_RECOVERY.md).
@@ -162,3 +185,6 @@ The crash-point, descriptor, matrix, and replay contract is specified in [docs/R
 The opt-in measurement contract is specified in [docs/R4_METRICS.md](docs/R4_METRICS.md), and the benchmark methodology, captured baselines, tuning decisions, and remaining performance gate are in [docs/R4_BENCHMARKS.md](docs/R4_BENCHMARKS.md).
 The first measured R1.5 scaling snapshot is in [docs/R1_5_BASELINE.csv](docs/R1_5_BASELINE.csv).
 Known numerical, protocol, resource, and recovery edge cases—including the rationale for a 53-bit binary64 uniform—are tracked in [docs/EDGE_CASES_AND_RELEASE_GATES.md](docs/EDGE_CASES_AND_RELEASE_GATES.md).
+The Heston equations, full-truncation decision, Feller warning, identity
+compatibility, and remaining R5 validation gates are documented in
+[docs/R5_HESTON.md](docs/R5_HESTON.md).

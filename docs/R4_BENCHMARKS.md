@@ -144,9 +144,10 @@ Captured artifacts:
   1,000-scenario blocks;
 - `R4_DURABLE_TARGET_BASELINE.csv`: 100 million scenarios, 10,000 blocks of
   10,000 scenarios, and target-scale cadences;
-- `R4_CHECKPOINT_GATE_REPEATS.csv`: three independent target-scale cadence
+- `R4_CHECKPOINT_GATE_REPEATS.csv`: three exploratory target-scale cadence
   sweeps captured from commit `fff2bc6`, preserving all six raw rows and the
-  alternated cadence order.
+  alternated cadence order. Three pairs are enough to expose instability, but
+  not enough to estimate checkpoint loss reliably or close a release gate.
 
 ## Findings and decisions
 
@@ -205,10 +206,22 @@ sustained builds and I/O, but those facts do not turn a measured miss into a
 pass. A later tuning phase should profile the metrics-off eight-worker path on
 an isolated host before changing the scheduler or claiming the gate.
 
-The checkpoint throughput-loss gate likewise remains open. Three independent
-target-scale repetitions now establish both a median and an observed spread,
-but one capture exceeds the gate by a large margin and the non-durable baseline
-varied by about 84%. A later capture needs an isolated, thermally stable host and
-the same alternating-order protocol. The original one-repetition CSV remains
-unchanged evidence; the six new raw rows are stored separately rather than
-rewriting history.
+The checkpoint throughput-loss gate likewise remains open. The median of the
+three exploratory pairs is a compact description of those observations, not a
+statistically reliable estimate: with `n=3`, it has no useful uncertainty bound
+and is highly sensitive to a single reordered observation. One capture exceeds
+the gate by a large margin and the non-durable baseline varied by about 84%.
+The original one-repetition CSV remains unchanged evidence; the six newer raw
+rows are stored separately rather than rewriting history.
+
+Before release, rerun this gate on an isolated, thermally stable host using a
+predeclared protocol: at least 20 paired final-only/sparse-checkpoint trials;
+balanced, alternating AB/BA order; identical inputs and build; all raw
+per-trial timings retained; and signed pairwise throughput loss reported with
+the median, interquartile range, median absolute deviation, and a 95% bootstrap
+confidence interval. Negative pairwise loss is valid measurement noise (the
+sparse run happened to be faster), not a negative physical checkpoint cost.
+Do not pass the gate if control-rate drift or an order effect is material, and
+otherwise require the upper confidence bound on loss to be below 10%. Building
+this rigorous gate harness is release work, but does not block independent R5
+model development.

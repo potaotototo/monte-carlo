@@ -192,10 +192,14 @@ Post-implementation audit fixes and decisions:
 Local target evidence: single-thread throughput, recoverable throughput,
 coordinator active-time proxy, 10,000-scenario P99 commit latency, and
 10,000-block recovery-open time passed their R4 gates. Sparse checkpoint
-throughput loss remains open: three independent target-scale sweeps produced a
-1.46% median but a -2.36% to 25.44% range, with an 84% swing in the non-durable
-baseline. The raw alternating-order rows are retained rather than treating the
-favorable median as a pass.
+throughput loss remains open: three exploratory target-scale sweeps produced a
+1.46% sample median but a -2.36% to 25.44% range, with an 84% swing in the
+non-durable baseline. With `n=3`, the median is descriptive only and supplies no
+reliable uncertainty estimate. The raw alternating-order rows are retained
+rather than treating the favorable median as a pass. Release work must add at
+least 20 balanced AB/BA pairs, robust spread statistics and a 95% interval,
+control-drift/order-effect checks, and require the interval's upper bound to be
+below 10%; this evidence gate does not block independent R5 model development.
 The eight-worker efficiency capture reached about 50%, below the 60% target,
 although four-worker efficiency remained above 70%; that gate stays open rather
 than being waived. Exact commands, limitations, results, and CSV artifacts are
@@ -207,3 +211,50 @@ targets, including the benchmark CLI contracts, early-rejection checks, and
 subprocess-tool help contracts; and
 256 seeded process-crash schedules pass with 9/9 failure-point coverage and the
 full topology-diversity gate.
+
+## R5 phase 1 — deterministic Heston model
+
+Implemented:
+
+- a model-tagged Heston parameter payload with canonical binary64 identity and
+  a pinned full-truncation-Euler/log-asset discretization version;
+- two fixed scenario-keyed Philox dimensions and explicit correlated-normal
+  construction, without mutable per-worker RNG state;
+- European and arithmetic Asian payoff paths, plus fused two-driver
+  antithetic-pair simulation and pair-mean aggregation;
+- validation for parameter domains and derived numerical constants, while
+  retaining mathematically valid zero-parameter and `rho=-1` or `rho=1`
+  limits;
+- structured Feller-ratio warnings rather than rejecting a valid but more
+  bias-prone parameter set;
+- Heston CLI inputs and JSON model/warning metadata, with the GBM-only
+  `--volatility` option rejected for Heston;
+- Heston-aware canonical durable metadata and replay descriptors; and
+- mixed GBM/Heston seeded crash-matrix cases using the unchanged exactly-once
+  manifest/recovery protocol.
+
+Compatibility decision: RunSpec schema v1 is treated as the tagged schema its
+existing `model_type` field anticipated. Its common prefix and GBM tail remain
+byte-for-byte unchanged, preserving the golden GBM RunSpec hash and existing
+GBM durable metadata. Heston has a separate model tail containing
+`discretization_version, v0, kappa, theta, xi, rho`; the inactive GBM
+volatility field is neither serialized nor hashed. Feller warnings are derived
+from the authoritative persisted parameters after decode instead of being
+duplicated in storage.
+
+Phase-1 verification covers Heston identity/metadata round trips, warning and
+parameter edges, a deterministic two-dimension RNG moment/correlation smoke
+test, pathwise agreement with the constant-variance GBM limit, exact results
+across worker counts, fused-antithetic estimator equality, and zero-work durable
+recovery. Release-level comparison with an independent analytic or QuantLib
+Heston price grid and an external SmallCrush/PractRand stream battery remain R5
+phase-2 gates. The complete numerical and compatibility contract is in
+`R5_HESTON.md`.
+
+Final R5 phase-1 verification: the optimized unit suite passes 42/42 tests;
+Release, ASan/UBSan, and ThreadSanitizer builds each pass all 9 CTest targets,
+including the Heston CLI warning contract; compiler static analysis reports no
+issues; and a 64-seed mixed GBM/Heston process-crash matrix passes exact
+clean/recovered equality with 9/9 failure-point coverage, both model types, six
+block sizes, eight block counts, four checkpoint intervals, four queue modes,
+and partial final blocks.
