@@ -9,7 +9,8 @@ This repository implements the project described in the supplied technical plan 
   volatility with pinned full-truncation Euler/log-asset discretization.
 - Black–Scholes closed-form pricing as the European-option correctness oracle.
 - A dependency-free semi-analytic Heston European-call oracle checked against
-  a five-case QuantLib/SciPy reference grid.
+  QuantLib/SciPy reference grids, with variance-normalized adaptive Fourier
+  expansion instead of a universal raw-frequency cutoff.
 - Random123 Philox4x32-10 with a known-answer test.
 - Versioned RNG counter layout: 40-bit scenario ID, 24-bit time step, 8-bit dimension, and 24-bit draw index.
 - RNG version 2 combines two Philox words into a 53-bit binary64 uniform with a pinned open-interval endpoint rule.
@@ -198,6 +199,6 @@ The crash-point, descriptor, matrix, and replay contract is specified in [docs/R
 The opt-in measurement contract is specified in [docs/R4_METRICS.md](docs/R4_METRICS.md), and the benchmark methodology, captured baselines, tuning decisions, and remaining performance gate are in [docs/R4_BENCHMARKS.md](docs/R4_BENCHMARKS.md).
 The first measured R1.5 scaling snapshot is in [docs/R1_5_BASELINE.csv](docs/R1_5_BASELINE.csv).
 Known numerical, protocol, resource, and recovery edge cases—including the rationale for a 53-bit binary64 uniform—are tracked in [docs/EDGE_CASES_AND_RELEASE_GATES.md](docs/EDGE_CASES_AND_RELEASE_GATES.md).
-The Heston equations, analytic reference grid, full-truncation decision, Feller
-warning, identity compatibility, and remaining R5 validation gate are documented in
-[docs/R5_HESTON.md](docs/R5_HESTON.md).
+The Heston equations, analytic reference grids, adaptive-tail decision,
+full-truncation decision, Feller warning, identity compatibility, and remaining
+R5 validation gate are documented in [docs/R5_HESTON.md](docs/R5_HESTON.md).

@@ -796,6 +796,79 @@ void heston_analytic_quantlib_grid() {
     }
 }
 
+void heston_analytic_adaptive_frequency_edges() {
+    const mc::HestonParams default_parameters{
+        0.04, 1.5, 0.04, 0.3, -0.7};
+    struct ShortMaturityCase {
+        double maturity;
+        double expected;
+    };
+    // Independently converged SciPy quad references. The former fixed [0, 200]
+    // Fourier domain understated these prices by 2.8% to 89.8% while still
+    // reporting the analytic reference as available.
+    const std::vector<ShortMaturityCase> short_maturity_cases = {
+        {3.0e-3, 0.444468816447376},
+        {1.0e-3, 0.254803539033169},
+        {3.0e-4, 0.138946066697969},
+        {1.0e-4, 0.080038149854062},
+        {1.0e-5, 0.025256315544304},
+    };
+    for (const ShortMaturityCase& test_case : short_maturity_cases) {
+        check_near(mc::heston_european_call_price(
+                       100.0, 100.0, 0.05, test_case.maturity,
+                       default_parameters),
+                   test_case.expected, 5.0e-9,
+                   "adaptive Heston oracle lost a short-maturity tail");
+    }
+
+    struct StressCase {
+        double spot;
+        double strike;
+        double rate;
+        double maturity;
+        mc::HestonParams parameters;
+        double expected;
+    };
+    // Low expected integrated variance and non-ATM moneyness jointly require
+    // a wider, more oscillatory domain than the original fixed rule covered.
+    const std::vector<StressCase> stress_cases = {
+        {65.99779952199391, 43.526450272648084,
+         0.07060460362936678, 0.25531661856505,
+         {0.01291364012647647, 0.37699273164639985,
+          0.00870054854053283, 0.618193710082573,
+          -0.6753969423733619},
+         23.251706360406523},
+        {121.55235885687279, 181.32459891326863,
+         0.010576835838468558, 0.6724974571519321,
+         {0.007758454265481618, 0.5623538515949088,
+          0.061224027613339047, 0.9248480107767016,
+          -0.11242893267199972},
+         0.12676926021637536},
+        {97.6414857002654, 103.12116976885129,
+         0.033126487376587535, 0.05073276139648636,
+         {0.005283700109833077, 0.9259389160635384,
+          0.010406167317041066, 0.07065601601611003,
+          0.12170623882999854},
+         0.00047644435405},
+    };
+    for (const StressCase& test_case : stress_cases) {
+        check_near(mc::heston_european_call_price(
+                       test_case.spot, test_case.strike, test_case.rate,
+                       test_case.maturity, test_case.parameters),
+                   test_case.expected, 2.0e-8,
+                   "adaptive Heston oracle diverged on a cutoff stress case");
+    }
+
+    // Extreme log-moneyness can exhaust the intentionally finite work budget.
+    // Returning no oracle is safer than publishing an unconverged number.
+    check_throws(
+        [&] {
+            static_cast<void>(mc::heston_european_call_price(
+                100.0, 1.0e-6, 0.05, 1.0, default_parameters));
+        },
+        "Heston oracle silently accepted an unconverged extreme-strike tail");
+}
+
 void heston_analytic_limits_and_guards() {
     mc::HestonParams parameters;
     parameters.initial_variance = 0.09;
@@ -817,6 +890,18 @@ void heston_analytic_limits_and_guards() {
                    100.0, 110.0, -0.01, effective_volatility, maturity),
                2.0e-13,
                "zero-xi Heston oracle mishandled deterministic variance");
+
+    parameters.initial_variance = 0.0;
+    parameters.long_run_variance = 0.04;
+    parameters.mean_reversion_rate = 1.0e-16;
+    constexpr double tiny_integrated_variance = 2.0e-18;
+    check_near(mc::heston_european_call_price(
+                   100.0, 100.0, 0.0, 1.0, parameters),
+               mc::black_scholes_call_price(
+                   100.0, 100.0, 0.0,
+                   std::sqrt(tiny_integrated_variance), 1.0),
+               2.0e-14,
+               "tiny-kappa Heston limit lost expected integrated variance");
 
     parameters.initial_variance = 0.04;
     parameters.long_run_variance = 0.04;
@@ -853,6 +938,14 @@ void heston_analytic_limits_and_guards() {
                 100.0, 100.0, 0.05, 1.0, parameters));
         },
         "Heston analytic oracle accepted invalid correlation");
+    parameters.correlation = 0.0;
+    check_throws(
+        [&] {
+            static_cast<void>(mc::heston_european_call_price(
+                100.0, std::numeric_limits<double>::max(), -1.0, 1.0,
+                parameters));
+        },
+        "Heston analytic oracle accepted an overflowing discounted strike");
 }
 
 void heston_constant_variance_matches_gbm_limit() {
@@ -2320,6 +2413,8 @@ int main(int argc, char** argv) {
          heston_run_spec_identity_and_warnings},
         {"heston_rng_dimension_smoke", heston_rng_dimension_smoke},
         {"heston_analytic_quantlib_grid", heston_analytic_quantlib_grid},
+        {"heston_analytic_adaptive_frequency_edges",
+         heston_analytic_adaptive_frequency_edges},
         {"heston_analytic_limits_and_guards",
          heston_analytic_limits_and_guards},
         {"heston_constant_variance_matches_gbm_limit",

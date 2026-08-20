@@ -267,8 +267,13 @@ Implemented:
   isolated from the full-truncation simulation kernel;
 - cancellation-resistant Riccati evaluation, including exact zero-`xi`, tiny
   positive-`xi`, time-varying deterministic-variance, and absorbing-zero limits;
+- variance-normalized adaptive Fourier expansion with embedded error estimates,
+  strike-phase segmentation, observed-tail convergence, and finite fail-closed
+  work limits, replacing the unsafe universal raw-frequency cutoff 200;
 - a five-case price grid independently reproduced by QuantLib 1.43 and SciPy,
   including QuantLib's Kahl–Jäckel stress test;
+- an eight-case SciPy cutoff-sweep regression grid covering the short-maturity,
+  low-variance, and non-ATM combinations that exposed the fixed-cutoff defect;
 - Heston CLI analytic price and signed discretization-plus-sampling error; and
 - a bounded, coordinate-explicit raw Philox stream adapter with portable
   little-endian binary and auditable hex modes.
@@ -278,11 +283,28 @@ contract are pinned. A predeclared 1 GiB PractRand 0.96 confirmation passes for
 dimension 0, dimension 1, and their scenario-wise interleaving. Exploratory
 anomalies and clean independent replications are retained rather than omitted.
 Exact methodology and commands are in `R5_HESTON.md`, full-precision prices are
-in `R5_HESTON_REFERENCE_GRID.csv`, and the external transcript is summarized in
-`R5_PRACTRAND_0_96_RESULTS.md`.
+in `R5_HESTON_REFERENCE_GRID.csv` and
+`R5_HESTON_ADAPTIVE_REFERENCE_GRID.csv`, and the external transcript is
+summarized in `R5_PRACTRAND_0_96_RESULTS.md`.
 
 Final R5 phase-2 verification: 44/44 optimized unit tests pass; Release,
 ASan/UBSan, and ThreadSanitizer builds each pass all 12 CTest targets. The
 predeclared PractRand confirmation processes three 1 GiB streams with no
 anomalies at any emitted checkpoint. CLI JSON validation and Makefile/CMake
 warning-clean builds also pass.
+
+Adaptive-cutoff follow-up: the defect was isolated by reproducing the old C++
+price with an independent SciPy integral truncated at 200, then expanding the
+domain to convergence. The worst retained short-maturity case was understated
+by 89.8%. Merely increasing the fixed limit was rejected because another
+parameter regime could move the decay scale again. The implemented policy and
+the research informing it are recorded in `R5_HESTON.md`; extreme moneyness
+that exceeds the explicit numerical budget is deliberately reported as an
+unavailable oracle.
+
+Final adaptive-cutoff verification: 45/45 optimized unit tests pass. Fresh
+Release, ASan/UBSan, and ThreadSanitizer builds each pass all 12 CTest targets;
+compiler warnings and `git diff --check` are clean. ASan again uses
+`detect_leaks=0` because LeakSanitizer is unavailable on this macOS runtime,
+and TSan keeps race detection fatal while disabling only thread-leak reports
+from intentional crash-child `_exit` paths.

@@ -24,6 +24,7 @@ in `R3_FAILURE_INJECTION.md`; and the Heston discretization contract is in
 | Heston variance | Full-truncation Euler uses `max(v,0)` without rewriting the stored state | Discretization version is pinned and non-finite paths fail with context | R5 phase 1 complete |
 | Feller violation | Valid run with a structured ratio warning below 1 | Bias risk remains visible in CLI and recovered metadata | R5 phase 1 complete |
 | Heston analytic limit | Stable Riccati algebra avoids `(z-d)/xi^2` cancellation; exact `xi=0` uses integrated deterministic variance | QuantLib grid and tiny-`xi` regression pass | R5 phase 2 complete |
+| Heston Fourier tail | Raw cutoff 200 silently understated short-maturity prices by up to 89.8% | Variance-normalized adaptive expansion, tail/error gates, finite work budget, and eight independent regressions | R5 phase 2 follow-up complete |
 | Multi-driver RNG | Heston uses fixed dimensions 0 and 1, then explicit correlation | Individual and interleaved 1 GiB PractRand 0.96 confirmations pass | R5 phase 2 complete |
 
 ## 1. Uniform precision and why binary64 calls for 53 random bits
@@ -262,6 +263,36 @@ for small positive `xi`. The implementation rewrites the first factor as
 stable `D(t)`. It does not switch to an approximate deterministic model at an
 undocumented epsilon. Exact `xi=0` uses the analytic integrated variance
 `theta*T + (v0-theta)*(1-exp(-kappa*T))/kappa`, with its `kappa=0` limit.
+
+A second, independent hazard is truncating the Fourier domain. The former
+512-node rule was accurate *within* `[0,200]`, so adding nodes did not expose
+the omitted tail. For default parameters at maturity `1e-5`, it returned
+`0.002564704292` instead of the independently converged `0.025256315544`, yet
+looked numerically well behaved. Short maturity and low expected variance move
+the characteristic-function decay to higher raw frequency; non-ATM strikes
+also increase oscillation. A cutoff that is adequate for a long-maturity stress
+case is therefore not automatically conservative for a short one.
+
+The replacement normalizes frequency by the square root of expected integrated
+variance, adaptively estimates local error with an embedded Gauss–Kronrod pair,
+splits intervals by strike phase, and doubles the tail until three consecutive
+slabs meet both magnitude and error criteria. Acceptance uses an explicit
+option-price tolerance, not “the result stopped changing when printed.” Work,
+depth, and tail expansion are bounded. If any bound is exhausted, the analytic
+reference is unavailable; the Monte Carlo run remains valid and the CLI emits
+`null` instead of a suspect benchmark.
+
+This stopping rule is strong operational evidence but not a proof of an
+analytic remainder bound. The release gate therefore also retains the five
+short-maturity and three low-variance/moneyness SciPy cutoff-sweep references in
+`R5_HESTON_ADAPTIVE_REFERENCE_GRID.csv`. The research background, alternatives,
+constants, and exact decision are documented in `R5_HESTON.md`.
+
+Expected integrated variance itself is evaluated with paired small-`kappa*T`
+series weights. Using only `expm1` is not sufficient when `v0=0`: the direct
+formula still subtracts nearly equal `theta*T` terms and can turn a positive
+`O(kappa*T^2)` variance integral into zero. The series branch begins at
+`kappa*T < 1e-4` and is pinned at `1e-16`.
 
 ## 10. R2 completion checklist
 
