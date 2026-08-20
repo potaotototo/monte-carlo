@@ -23,7 +23,8 @@ in `R3_FAILURE_INJECTION.md`; and the Heston discretization contract is in
 | Runtime metrics | Opt-in monotonic timings, bounded queue peaks, and durable stage counters | Scheduling perturbation and missing recovered-block samples are explicit | R4 phase 1 complete |
 | Heston variance | Full-truncation Euler uses `max(v,0)` without rewriting the stored state | Discretization version is pinned and non-finite paths fail with context | R5 phase 1 complete |
 | Feller violation | Valid run with a structured ratio warning below 1 | Bias risk remains visible in CLI and recovered metadata | R5 phase 1 complete |
-| Multi-driver RNG | Heston uses fixed dimensions 0 and 1, then explicit correlation | Built-in smoke passes; external SmallCrush/PractRand remains a release gate | R5 phase 2 |
+| Heston analytic limit | Stable Riccati algebra avoids `(z-d)/xi^2` cancellation; exact `xi=0` uses integrated deterministic variance | QuantLib grid and tiny-`xi` regression pass | R5 phase 2 complete |
+| Multi-driver RNG | Heston uses fixed dimensions 0 and 1, then explicit correlation | Individual and interleaved 1 GiB PractRand 0.96 confirmations pass | R5 phase 2 complete |
 
 ## 1. Uniform precision and why binary64 calls for 53 random bits
 
@@ -253,6 +254,14 @@ failed path would silently turn the documented discretization into a different
 algorithm. Correlation endpoints `-1` and `1`, zero volatility of variance, and
 zero initial or long-run variance are valid limiting cases rather than divide-
 by-zero errors.
+
+The Heston Fourier oracle has a separate cancellation hazard: the common
+closed-form factors `(z-d)/xi^2` and a log difference lose nearly all precision
+for small positive `xi`. The implementation rewrites the first factor as
+`-A/(z+d)` and evaluates `C(T)=r*i*phi*T+kappa*theta*integral(D(t),0,T)` using
+stable `D(t)`. It does not switch to an approximate deterministic model at an
+undocumented epsilon. Exact `xi=0` uses the analytic integrated variance
+`theta*T + (v0-theta)*(1-exp(-kappa*T))/kappa`, with its `kappa=0` limit.
 
 ## 10. R2 completion checklist
 

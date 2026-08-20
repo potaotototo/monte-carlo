@@ -16,6 +16,7 @@ set(MC_RUNTIME_SOURCES
     src/metrics.cpp
     src/models/gbm.cpp
     src/models/heston.cpp
+    src/models/heston_analytic.cpp
     src/parse.cpp
     src/persistence_codec.cpp
     src/rng/philox_rng.cpp
@@ -86,6 +87,9 @@ target_link_libraries(replay_failure PRIVATE mc_runtime)
 add_executable(run_crash_matrix tools/run_crash_matrix.cpp)
 target_link_libraries(run_crash_matrix PRIVATE mc_runtime)
 
+add_executable(export_rng_stream tools/export_rng_stream.cpp)
+target_link_libraries(export_rng_stream PRIVATE mc_runtime)
+
 include(CTest)
 if(BUILD_TESTING)
     add_executable(mc_tests tests/test_main.cpp)
@@ -109,6 +113,15 @@ if(BUILD_TESTING)
              --model heston --heston-kappa 1 --heston-theta 0.04
              --heston-xi 0.5 --heston-rho -0.7 --steps 4
              --scenarios 128 --workers 2 --block-size 64)
+    add_test(NAME export_rng_stream_hex_smoke COMMAND export_rng_stream
+             --seed 1311768467463790320 --words 4 --dimensions 2
+             --format hex)
+    add_test(NAME export_rng_stream_rejects_scenario_wrap
+             COMMAND export_rng_stream --scenario-start 1099511627775
+             --words 2 --format hex)
+    add_test(NAME export_rng_stream_rejects_dimension_wrap
+             COMMAND export_rng_stream --dimension-start 255 --dimensions 2
+             --words 2 --format hex)
     # Launch by a bare name through PATH so the persistence tool's crash-child
     # self-exec path is covered, not only CTest's resolved target path.
     add_test(NAME benchmark_persistence_smoke
@@ -134,7 +147,14 @@ if(BUILD_TESTING)
     set_tests_properties(replay_failure_help PROPERTIES
         PASS_REGULAR_EXPRESSION "Usage: replay_failure")
     set_tests_properties(run_simulation_heston_smoke PROPERTIES
-        PASS_REGULAR_EXPRESSION "heston_feller_condition_violated")
+        PASS_REGULAR_EXPRESSION "heston_analytic_price")
+    set_tests_properties(export_rng_stream_hex_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "092c9b4478384bc0")
+    set_tests_properties(
+        export_rng_stream_rejects_scenario_wrap
+        export_rng_stream_rejects_dimension_wrap
+        PROPERTIES WILL_FAIL TRUE)
     set_tests_properties(benchmark_persistence_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION
             "crash_recovery_open_ns,recovery_computed_scenarios,recomputed_scenarios_after_crash"

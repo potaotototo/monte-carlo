@@ -1,6 +1,6 @@
 # Fault-Tolerant Parallel Monte Carlo Runtime
 
-This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime plus R4 observability/benchmark tooling and R5 phase-1 Heston support: validated GBM and stochastic-volatility pricers, a deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, replayable process-crash harness, opt-in runtime/persistence metrics, and repeatable compute, aggregation, checkpoint, and recovery sweeps.
+This repository implements the project described in the supplied technical plan as a sequence of independently testable releases. The current code is the R3 fault-tolerant runtime plus R4 observability/benchmark tooling and R5 phase-2 Heston validation: validated GBM and stochastic-volatility pricers, a deterministic parallel block engine, crash-consistent local run store, restart recovery protocol, replayable process-crash harness, opt-in runtime/persistence metrics, and repeatable compute, aggregation, checkpoint, and recovery sweeps.
 
 ## What works now
 
@@ -8,6 +8,8 @@ This repository implements the project described in the supplied technical plan 
 - European and arithmetic Asian call pricing under Heston stochastic
   volatility with pinned full-truncation Euler/log-asset discretization.
 - Black–Scholes closed-form pricing as the European-option correctness oracle.
+- A dependency-free semi-analytic Heston European-call oracle checked against
+  a five-case QuantLib/SciPy reference grid.
 - Random123 Philox4x32-10 with a known-answer test.
 - Versioned RNG counter layout: 40-bit scenario ID, 24-bit time step, 8-bit dimension, and 24-bit draw index.
 - RNG version 2 combines two Philox words into a 53-bit binary64 uniform with a pinned open-interval endpoint rule.
@@ -36,6 +38,7 @@ This repository implements the project described in the supplied technical plan 
   metrics-on/off throughput, aggregation-strategy comparisons, and real-crash
   checkpoint/recovery benchmarks.
 - JSON output containing the estimate, standard error, 95% confidence interval, throughput, and analytic error where applicable.
+- A raw Philox `le64`/hex stream adapter for external statistical batteries.
 
 R3 validates application-level process crashes at every R2 result/manifest persistence boundary. It does not emulate machine power loss, torn device writes, or filesystem/kernel faults; the durability claim remains scoped to tested local POSIX filesystems honoring the documented flush protocol.
 
@@ -49,6 +52,7 @@ make
 make benchmark
 make benchmark-tools
 make r3-tools
+make r5-tools
 ```
 
 Run a European call simulation:
@@ -91,6 +95,15 @@ Run a Heston European call (default parameters shown explicitly):
 The JSON output includes the discretization version, Feller ratio, and a
 structured warning when the ratio is below one. Such a run is valid, but the
 warning indicates elevated full-truncation discretization-bias risk.
+
+European Heston calls also include the independent continuous-time price and
+signed Monte Carlo error. Export the two interleaved Heston RNG dimensions for
+an external battery with:
+
+```sh
+./build/export_rng_stream --seed 1 --dimensions 2 --words 134217728 \
+  | RNG_test stdin64 -tf 2 -te 1 -tlmax 1GB -tlmaxonly
+```
 
 Enable durable checkpoints and resume by rerunning the same command:
 
@@ -177,7 +190,7 @@ docs/             phased implementation notes
 | R2 | Durable block results, atomic manifests, and restart recovery | Complete |
 | R3 | Deterministic crash injection and replay descriptors | Complete |
 | R4 | Synchronization, coordinator, persistence, and recovery benchmarks | Phase 2 implemented; 8-worker efficiency gate open |
-| R5 | Deterministic Heston stochastic volatility | Phase 1 implemented; independent price grid and external RNG battery open |
+| R5 | Deterministic Heston stochastic volatility | Phase 2 complete, including independent prices and a 1 GiB external RNG battery |
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the phased handoff and acceptance evidence.
 The durable file, commit, and recovery contract is specified in [docs/R2_DURABLE_RECOVERY.md](docs/R2_DURABLE_RECOVERY.md).
@@ -185,6 +198,6 @@ The crash-point, descriptor, matrix, and replay contract is specified in [docs/R
 The opt-in measurement contract is specified in [docs/R4_METRICS.md](docs/R4_METRICS.md), and the benchmark methodology, captured baselines, tuning decisions, and remaining performance gate are in [docs/R4_BENCHMARKS.md](docs/R4_BENCHMARKS.md).
 The first measured R1.5 scaling snapshot is in [docs/R1_5_BASELINE.csv](docs/R1_5_BASELINE.csv).
 Known numerical, protocol, resource, and recovery edge cases—including the rationale for a 53-bit binary64 uniform—are tracked in [docs/EDGE_CASES_AND_RELEASE_GATES.md](docs/EDGE_CASES_AND_RELEASE_GATES.md).
-The Heston equations, full-truncation decision, Feller warning, identity
-compatibility, and remaining R5 validation gates are documented in
+The Heston equations, analytic reference grid, full-truncation decision, Feller
+warning, identity compatibility, and remaining R5 validation gate are documented in
 [docs/R5_HESTON.md](docs/R5_HESTON.md).

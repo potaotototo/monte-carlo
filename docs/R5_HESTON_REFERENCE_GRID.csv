@@ -1,0 +1,6 @@
+case,spot,strike,rate,maturity,v0,kappa,theta,xi,rho,quantlib_1_43_price,scipy_independent_price,absolute_difference,provenance
+feller_safe_atm,100,100,0.05,1,0.04,1.5,0.04,0.3,-0.7,10.361869020966115,10.361869020966115,0,constructed_grid
+feller_safe_otm,100,120,0.05,1,0.04,1.5,0.04,0.3,-0.7,2.193309940983057,2.193309940983057,0,constructed_grid
+feller_violation_atm,100,100,0.01,2,0.09,1.2,0.08,0.9,-0.45,14.435003424669659,14.435003424669659,0,constructed_grid
+positive_rho_itm,80,70,0.03,0.4,0.06,2,0.05,0.5,0.4,11.579204967505497,11.579204967505497,0,constructed_grid
+quantlib_kahl_jaeckel,100,200,0,10,0.16,1,0.16,2,-0.8,4.952114720879724,4.952114720879756,3.2e-14,quantlib_official_test_case

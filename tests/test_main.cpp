@@ -328,6 +328,26 @@ void uniform_mapping_v2_boundaries() {
     check(mc::uniform_open01(0U, 0U, 0U) ==
               mc::uniform_from_words_v2(0x6627E8D5U, 0xE169C58DU),
           "RNG v2 counter-to-uniform golden mapping changed");
+    check(mc::random_u64(0U, 0U, 0U) == 0x6627E8D5E169C58DULL,
+          "raw RNG word diverged from the Random123 known answer");
+    const std::uint64_t raw = mc::random_u64(99U, 17U, 3U, 2U, 11U);
+    check(mc::uniform_open01(99U, 17U, 3U, 2U, 11U) ==
+              mc::uniform_from_words_v2(
+                  static_cast<std::uint32_t>(raw >> 32U),
+                  static_cast<std::uint32_t>(raw)),
+          "uniform conversion and exported raw word use different Philox data");
+    const std::array<std::uint64_t, 4> interleaved_golden = {
+        0x092C9B4478384BC0ULL,
+        0x392FD6B226FC076CULL,
+        0x389D999A609CF517ULL,
+        0xEACE5522A93BE4CFULL,
+    };
+    for (std::size_t index = 0U; index < interleaved_golden.size(); ++index) {
+        check(mc::random_u64(0x123456789ABCDEF0ULL, index / 2U, 0U,
+                             static_cast<std::uint32_t>(index % 2U)) ==
+                  interleaved_golden[index],
+              "interleaved raw RNG stream golden mapping changed");
+    }
 
     for (std::uint64_t scenario :
          std::array<std::uint64_t, 4>{0U, 1U, 17U, mc::kMaxScenarios - 1U}) {
@@ -743,6 +763,96 @@ void heston_rng_dimension_smoke() {
               variance_y > 0.95 && variance_y < 1.05 &&
               std::abs(correlation) < 0.02,
           "Heston RNG dimensions failed the deterministic moment/correlation smoke test");
+}
+
+void heston_analytic_quantlib_grid() {
+    struct Case {
+        double spot;
+        double strike;
+        double rate;
+        double maturity;
+        mc::HestonParams parameters;
+        double expected;
+    };
+    const std::vector<Case> cases = {
+        {100.0, 100.0, 0.05, 1.0, {0.04, 1.5, 0.04, 0.3, -0.7},
+         10.361869020966115},
+        {100.0, 120.0, 0.05, 1.0, {0.04, 1.5, 0.04, 0.3, -0.7},
+         2.193309940983057},
+        {100.0, 100.0, 0.01, 2.0, {0.09, 1.2, 0.08, 0.9, -0.45},
+         14.435003424669659},
+        {80.0, 70.0, 0.03, 0.4, {0.06, 2.0, 0.05, 0.5, 0.4},
+         11.579204967505497},
+        // QuantLib's Kahl-Jaeckel long-maturity/deep-OTM stress case.
+        {100.0, 200.0, 0.0, 10.0, {0.16, 1.0, 0.16, 2.0, -0.8},
+         4.952114720879724},
+    };
+    for (const Case& test_case : cases) {
+        check_near(mc::heston_european_call_price(
+                       test_case.spot, test_case.strike, test_case.rate,
+                       test_case.maturity, test_case.parameters),
+                   test_case.expected, 5.0e-10,
+                   "Heston analytic price diverged from QuantLib grid");
+    }
+}
+
+void heston_analytic_limits_and_guards() {
+    mc::HestonParams parameters;
+    parameters.initial_variance = 0.09;
+    parameters.long_run_variance = 0.04;
+    parameters.mean_reversion_rate = 1.25;
+    parameters.volatility_of_variance = 0.0;
+    parameters.correlation = 1.0;
+    constexpr double maturity = 2.0;
+    const double integrated_variance =
+        parameters.long_run_variance * maturity +
+        (parameters.initial_variance - parameters.long_run_variance) *
+            (-std::expm1(-parameters.mean_reversion_rate * maturity)) /
+            parameters.mean_reversion_rate;
+    const double effective_volatility =
+        std::sqrt(integrated_variance / maturity);
+    check_near(mc::heston_european_call_price(
+                   100.0, 110.0, -0.01, maturity, parameters),
+               mc::black_scholes_call_price(
+                   100.0, 110.0, -0.01, effective_volatility, maturity),
+               2.0e-13,
+               "zero-xi Heston oracle mishandled deterministic variance");
+
+    parameters.initial_variance = 0.04;
+    parameters.long_run_variance = 0.04;
+    parameters.mean_reversion_rate = 1.5;
+    parameters.volatility_of_variance = 1.0e-10;
+    parameters.correlation = -0.7;
+    check_near(mc::heston_european_call_price(
+                   100.0, 100.0, 0.05, 1.0, parameters),
+               mc::black_scholes_call_price(100.0, 100.0, 0.05, 0.2, 1.0),
+               2.0e-8,
+               "small-xi Heston oracle lost its deterministic limit");
+
+    parameters.initial_variance = 0.0;
+    parameters.long_run_variance = 0.0;
+    parameters.mean_reversion_rate = 0.0;
+    parameters.volatility_of_variance = 0.8;
+    check_near(mc::heston_european_call_price(
+                   100.0, 90.0, 0.05, 1.0, parameters),
+               100.0 - 90.0 * std::exp(-0.05), 1.0e-14,
+               "absorbing-zero Heston oracle mishandled deterministic asset");
+
+    parameters.initial_variance = -0.01;
+    check_throws(
+        [&] {
+            static_cast<void>(mc::heston_european_call_price(
+                100.0, 100.0, 0.05, 1.0, parameters));
+        },
+        "Heston analytic oracle accepted negative initial variance");
+    parameters.initial_variance = 0.04;
+    parameters.correlation = 1.01;
+    check_throws(
+        [&] {
+            static_cast<void>(mc::heston_european_call_price(
+                100.0, 100.0, 0.05, 1.0, parameters));
+        },
+        "Heston analytic oracle accepted invalid correlation");
 }
 
 void heston_constant_variance_matches_gbm_limit() {
@@ -2209,6 +2319,9 @@ int main(int argc, char** argv) {
         {"heston_run_spec_identity_and_warnings",
          heston_run_spec_identity_and_warnings},
         {"heston_rng_dimension_smoke", heston_rng_dimension_smoke},
+        {"heston_analytic_quantlib_grid", heston_analytic_quantlib_grid},
+        {"heston_analytic_limits_and_guards",
+         heston_analytic_limits_and_guards},
         {"heston_constant_variance_matches_gbm_limit",
          heston_constant_variance_matches_gbm_limit},
         {"heston_determinism_and_antithetics",

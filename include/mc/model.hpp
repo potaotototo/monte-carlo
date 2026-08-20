@@ -83,4 +83,13 @@ double black_scholes_call_price(double spot,
                                 double volatility,
                                 double maturity);
 
+// Independent semi-analytic oracle for a continuously monitored European call
+// under the continuous-time Heston model (no dividends). It intentionally does
+// not use the simulation time-step or discretization implementation.
+double heston_european_call_price(double spot,
+                                  double strike,
+                                  double rate,
+                                  double maturity,
+                                  const HestonParams& parameters);
+
 }  // namespace mc

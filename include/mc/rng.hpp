@@ -22,6 +22,15 @@ PhiloxCounter pack_counter_v1(std::uint64_t scenario_id,
                               std::uint32_t dimension,
                               std::uint32_t draw_index);
 
+// Raw 64-bit stream word formed from Philox output words 0 and 1. This is the
+// exact source consumed by RNG v2's binary64 conversion and is exposed for
+// known-answer tests and external statistical-battery adapters.
+std::uint64_t random_u64(std::uint64_t global_seed,
+                         std::uint64_t scenario_id,
+                         std::uint32_t time_step,
+                         std::uint32_t dimension = 0,
+                         std::uint32_t draw_index = 0);
+
 double uniform_open01(std::uint64_t global_seed,
                       std::uint64_t scenario_id,
                       std::uint32_t time_step,

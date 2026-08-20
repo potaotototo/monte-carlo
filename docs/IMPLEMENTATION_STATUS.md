@@ -246,9 +246,9 @@ Phase-1 verification covers Heston identity/metadata round trips, warning and
 parameter edges, a deterministic two-dimension RNG moment/correlation smoke
 test, pathwise agreement with the constant-variance GBM limit, exact results
 across worker counts, fused-antithetic estimator equality, and zero-work durable
-recovery. Release-level comparison with an independent analytic or QuantLib
-Heston price grid and an external SmallCrush/PractRand stream battery remain R5
-phase-2 gates. The complete numerical and compatibility contract is in
+recovery. Independent analytic/QuantLib prices and an external stream battery
+were intentionally deferred to phase 2. The complete numerical and
+compatibility contract is in
 `R5_HESTON.md`.
 
 Final R5 phase-1 verification: the optimized unit suite passes 42/42 tests;
@@ -258,3 +258,31 @@ issues; and a 64-seed mixed GBM/Heston process-crash matrix passes exact
 clean/recovered equality with 9/9 failure-point coverage, both model types, six
 block sizes, eight block counts, four checkpoint intervals, four queue modes,
 and partial final blocks.
+
+## R5 phase 2 — independent Heston and RNG validation
+
+Implemented:
+
+- a dependency-free semi-analytic continuous-time Heston European-call oracle
+  isolated from the full-truncation simulation kernel;
+- cancellation-resistant Riccati evaluation, including exact zero-`xi`, tiny
+  positive-`xi`, time-varying deterministic-variance, and absorbing-zero limits;
+- a five-case price grid independently reproduced by QuantLib 1.43 and SciPy,
+  including QuantLib's Kahl–Jäckel stress test;
+- Heston CLI analytic price and signed discretization-plus-sampling error; and
+- a bounded, coordinate-explicit raw Philox stream adapter with portable
+  little-endian binary and auditable hex modes.
+
+The analytic grid gate is complete. The external adapter and its CI golden
+contract are pinned. A predeclared 1 GiB PractRand 0.96 confirmation passes for
+dimension 0, dimension 1, and their scenario-wise interleaving. Exploratory
+anomalies and clean independent replications are retained rather than omitted.
+Exact methodology and commands are in `R5_HESTON.md`, full-precision prices are
+in `R5_HESTON_REFERENCE_GRID.csv`, and the external transcript is summarized in
+`R5_PRACTRAND_0_96_RESULTS.md`.
+
+Final R5 phase-2 verification: 44/44 optimized unit tests pass; Release,
+ASan/UBSan, and ThreadSanitizer builds each pass all 12 CTest targets. The
+predeclared PractRand confirmation processes three 1 GiB streams with no
+anomalies at any emitted checkpoint. CLI JSON validation and Makefile/CMake
+warning-clean builds also pass.

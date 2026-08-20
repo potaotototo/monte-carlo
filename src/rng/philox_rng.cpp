@@ -81,6 +81,17 @@ double uniform_open01(std::uint64_t global_seed,
                       std::uint32_t time_step,
                       std::uint32_t dimension,
                       std::uint32_t draw_index) {
+    const std::uint64_t raw = random_u64(global_seed, scenario_id, time_step,
+                                         dimension, draw_index);
+    return uniform_from_words_v2(static_cast<std::uint32_t>(raw >> 32U),
+                                 static_cast<std::uint32_t>(raw));
+}
+
+std::uint64_t random_u64(std::uint64_t global_seed,
+                         std::uint64_t scenario_id,
+                         std::uint32_t time_step,
+                         std::uint32_t dimension,
+                         std::uint32_t draw_index) {
     const PhiloxCounter counter =
         pack_counter_v1(scenario_id, time_step, dimension, draw_index);
     const PhiloxKey key = {
@@ -88,7 +99,8 @@ double uniform_open01(std::uint64_t global_seed,
         static_cast<std::uint32_t>(global_seed >> 32U),
     };
     const PhiloxCounter random_words = philox4x32_10(counter, key);
-    return uniform_from_words_v2(random_words[0], random_words[1]);
+    return (static_cast<std::uint64_t>(random_words[0]) << 32U) |
+           static_cast<std::uint64_t>(random_words[1]);
 }
 
 double uniform_from_words_v2(std::uint32_t high_word,

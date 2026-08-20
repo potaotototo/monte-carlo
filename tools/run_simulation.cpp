@@ -241,6 +241,27 @@ int main(int argc, char** argv) {
             return mc::run_parallel(spec, config, metrics);
         }();
         const auto stopped = std::chrono::steady_clock::now();
+        std::optional<double> analytic_reference;
+        std::string_view analytic_field;
+        if (spec.payoff_type == mc::PayoffType::EuropeanCall) {
+            try {
+                if (spec.model_type == mc::ModelType::Gbm) {
+                    analytic_field = "black_scholes_price";
+                    analytic_reference = mc::black_scholes_call_price(
+                        spec.spot, spec.strike, spec.rate, spec.volatility,
+                        spec.maturity);
+                } else {
+                    analytic_field = "heston_analytic_price";
+                    analytic_reference = mc::heston_european_call_price(
+                        spec.spot, spec.strike, spec.rate, spec.maturity,
+                        *spec.heston);
+                }
+            } catch (const std::exception&) {
+                // The oracle is diagnostic and independent of path execution.
+                // Its failure must not turn a completed run into truncated JSON.
+                analytic_reference.reset();
+            }
+        }
         const double seconds =
             std::chrono::duration<double>(stopped - started).count();
         if (!(seconds > 0.0)) {
@@ -356,12 +377,19 @@ int main(int argc, char** argv) {
                              : result.scenarios_processed) /
                          seconds;
 
-        if (spec.model_type == mc::ModelType::Gbm &&
-            spec.payoff_type == mc::PayoffType::EuropeanCall) {
-            const double analytic = mc::black_scholes_call_price(
-                spec.spot, spec.strike, spec.rate, spec.volatility, spec.maturity);
-            std::cout << ",\n  \"black_scholes_price\": " << analytic
-                      << ",\n  \"analytic_error\": " << result.aggregate.mean - analytic;
+        if (!analytic_field.empty()) {
+            std::cout << ",\n  \"" << analytic_field << "\": ";
+            if (analytic_reference.has_value()) {
+                std::cout << *analytic_reference
+                          << ",\n  \"analytic_error\": "
+                          << result.aggregate.mean - *analytic_reference
+                          << ",\n  \"analytic_reference_status\": \"available\"";
+            } else {
+                std::cout
+                    << "null,\n  \"analytic_error\": null,\n"
+                    << "  \"analytic_reference_status\": "
+                    << "\"unavailable_numerical_domain\"";
+            }
         }
         if (metrics_enabled) {
             std::cout << ",\n  \"metrics\": {\n"

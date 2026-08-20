@@ -11,6 +11,7 @@ LIB_SOURCES := \
 	src/metrics.cpp \
 	src/models/gbm.cpp \
 	src/models/heston.cpp \
+	src/models/heston_analytic.cpp \
 	src/parse.cpp \
 	src/persistence_codec.cpp \
 	src/rng/philox_rng.cpp \
@@ -38,10 +39,11 @@ AGGREGATION_BENCHMARK := $(BUILD_DIR)/benchmark_aggregation
 PERSISTENCE_BENCHMARK := $(BUILD_DIR)/benchmark_persistence
 REPLAY_FAILURE := $(BUILD_DIR)/replay_failure
 CRASH_MATRIX := $(BUILD_DIR)/run_crash_matrix
+RNG_STREAM := $(BUILD_DIR)/export_rng_stream
 BUILD_CONFIG_STAMP := $(BUILD_DIR)/.build-config
 BUILD_CONFIG_ID := $(SOURCE_REVISION)-$(BUILD_FLAGS_ID)
 
-.PHONY: all test benchmark benchmark-tools r3-tools clean FORCE
+.PHONY: all test benchmark benchmark-tools r3-tools r5-tools clean FORCE
 
 all: $(RUNNER)
 
@@ -88,5 +90,10 @@ $(CRASH_MATRIX): $(LIB_SOURCES) tools/run_crash_matrix.cpp $(HEADERS) $(INTERNAL
 
 r3-tools: $(REPLAY_FAILURE) $(CRASH_MATRIX)
 
+$(RNG_STREAM): $(LIB_SOURCES) tools/export_rng_stream.cpp $(HEADERS) $(INTERNAL_HEADERS) $(BUILD_CONFIG_STAMP) | $(BUILD_DIR)
+	$(CXX) $(MC_CPPFLAGS) $(CXXFLAGS) $(filter %.cpp,$^) $(LDFLAGS) $(LDLIBS) -o $@
+
+r5-tools: $(RNG_STREAM)
+
 clean:
-	rm -f $(RUNNER) $(TESTS) $(BENCHMARK) $(AGGREGATION_BENCHMARK) $(PERSISTENCE_BENCHMARK) $(REPLAY_FAILURE) $(CRASH_MATRIX) $(BUILD_CONFIG_STAMP) $(BUILD_CONFIG_STAMP).tmp
+	rm -f $(RUNNER) $(TESTS) $(BENCHMARK) $(AGGREGATION_BENCHMARK) $(PERSISTENCE_BENCHMARK) $(REPLAY_FAILURE) $(CRASH_MATRIX) $(RNG_STREAM) $(BUILD_CONFIG_STAMP) $(BUILD_CONFIG_STAMP).tmp
