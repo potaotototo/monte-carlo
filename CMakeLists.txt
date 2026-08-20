@@ -81,6 +81,11 @@ target_link_libraries(benchmark_aggregation PRIVATE mc_runtime)
 add_executable(benchmark_persistence tools/benchmark_persistence.cpp)
 target_link_libraries(benchmark_persistence PRIVATE mc_runtime)
 
+add_executable(benchmark_checkpoint_gate
+    tools/benchmark_checkpoint_gate.cpp
+    tools/checkpoint_gate_stats.cpp)
+target_link_libraries(benchmark_checkpoint_gate PRIVATE mc_runtime)
+
 add_executable(replay_failure tools/replay_failure.cpp)
 target_link_libraries(replay_failure PRIVATE mc_runtime)
 
@@ -92,7 +97,7 @@ target_link_libraries(export_rng_stream PRIVATE mc_runtime)
 
 include(CTest)
 if(BUILD_TESTING)
-    add_executable(mc_tests tests/test_main.cpp)
+    add_executable(mc_tests tests/test_main.cpp tools/checkpoint_gate_stats.cpp)
     target_link_libraries(mc_tests PRIVATE mc_runtime)
     add_test(NAME mc_tests COMMAND mc_tests)
     add_test(NAME benchmark_scaling_smoke COMMAND benchmark_scaling
@@ -129,6 +134,16 @@ if(BUILD_TESTING)
              "PATH=$<TARGET_FILE_DIR:benchmark_persistence>:$ENV{PATH}"
              benchmark_persistence --scenarios 1024 --workers 2 --repeats 1
              --block-sizes 256 --checkpoint-intervals 1,4)
+    add_test(NAME benchmark_checkpoint_gate_smoke
+             COMMAND benchmark_checkpoint_gate --scenarios 2048 --workers 2
+             --block-size 256 --pairs 4 --warmup-pairs 0
+             --control-interval 8 --treatment-interval 4 --cooldown-ms 0
+             --bootstrap-samples 1000)
+    add_test(NAME benchmark_checkpoint_gate_rejects_bad_cadence
+             COMMAND benchmark_checkpoint_gate --scenarios 2048 --workers 2
+             --block-size 256 --pairs 4 --warmup-pairs 0
+             --control-interval 7 --treatment-interval 4 --cooldown-ms 0
+             --bootstrap-samples 1000)
     set_tests_properties(benchmark_scaling_smoke PROPERTIES
         PASS_REGULAR_EXPRESSION
             "scenarios,time_steps,repeats,block_size,queue_capacity_requested")
@@ -159,4 +174,10 @@ if(BUILD_TESTING)
         PASS_REGULAR_EXPRESSION
             "crash_recovery_open_ns,recovery_computed_scenarios,recomputed_scenarios_after_crash"
         TIMEOUT 60)
+    set_tests_properties(benchmark_checkpoint_gate_smoke PROPERTIES
+        PASS_REGULAR_EXPRESSION
+            "pairwise_throughput_loss_percent,median_loss_percent"
+        TIMEOUT 60)
+    set_tests_properties(benchmark_checkpoint_gate_rejects_bad_cadence
+        PROPERTIES WILL_FAIL TRUE)
 endif()

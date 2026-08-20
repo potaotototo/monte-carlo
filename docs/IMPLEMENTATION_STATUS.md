@@ -164,7 +164,10 @@ Implemented:
   recovery work, duplicate-work accounting, and the theoretical recomputation
   bound;
 - focused 10,000-committed-block and 100-million-scenario target-scale runs;
-- CMake smoke tests with CSV-header contract checks for all three tools.
+- a dedicated balanced AB/BA checkpoint gate harness with retained raw pairs,
+  robust spread, deterministic bootstrap interval, Theil–Sen drift, explicit
+  order-effect checks, and machine-readable component/pass flags;
+- CMake smoke tests with CSV-header contract checks for all four tools.
 
 Post-implementation audit fixes and decisions:
 
@@ -200,6 +203,9 @@ rather than treating the favorable median as a pass. Release work must add at
 least 20 balanced AB/BA pairs, robust spread statistics and a 95% interval,
 control-drift/order-effect checks, and require the interval's upper bound to be
 below 10%; this evidence gate does not block independent R5 model development.
+That harness is now implemented with the predeclared 20-pair/10%/5%/5% policy;
+only the isolated-host capture remains. Harness availability is not recorded as
+a performance pass.
 The eight-worker efficiency capture reached about 50%, below the 60% target,
 although four-worker efficiency remained above 70%; that gate stays open rather
 than being waived. Exact commands, limitations, results, and CSV artifacts are
@@ -211,6 +217,13 @@ targets, including the benchmark CLI contracts, early-rejection checks, and
 subprocess-tool help contracts; and
 256 seeded process-crash schedules pass with 9/9 failure-point coverage and the
 full topology-diversity gate.
+
+Checkpoint-gate harness follow-up: 46/46 optimized unit tests pass. Fresh
+Release, ASan/UBSan, and ThreadSanitizer builds each pass all 14 CTest targets,
+including the paired-tool smoke test and bad-cadence rejection. The Makefile
+build is warning-clean under the repository's full warning policy. These tests
+validate execution and classification logic; they do not substitute for the
+still-pending isolated-host 20-pair performance capture.
 
 ## R5 phase 1 — deterministic Heston model
 

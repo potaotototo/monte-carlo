@@ -23,6 +23,13 @@ make benchmark-tools
 ./build/benchmark_persistence \
   --scenarios 200000 --steps 1 --workers 8 --repeats 3 \
   --block-sizes 2048,10000 --checkpoint-intervals 1,4,16,64
+
+./build/benchmark_checkpoint_gate \
+  --scenarios 100000000 --steps 1 --workers 8 --block-size 10000 \
+  --pairs 20 --warmup-pairs 1 --control-interval 10000 \
+  --treatment-interval 6000 --cooldown-ms 1000 \
+  --bootstrap-samples 10000 --require-pass \
+  > docs/R4_CHECKPOINT_GATE_20_PAIRS.csv
 ```
 
 Every row includes the scenario count, time-step count, and repetition count.
@@ -126,6 +133,63 @@ The release gate uses
 `100 * (1 - sparse_checkpoint_rate / final_only_rate)`, so it is specifically a
 checkpoint throughput-loss gate rather than an elapsed-time-overhead gate.
 
+## Checkpoint evidence gate harness
+
+`benchmark_checkpoint_gate` implements the predeclared paired protocol rather
+than asking an operator to assemble independent benchmark medians afterward.
+For a run with `N` blocks it enforces:
+
+- control cadence `>= N`, which produces no periodic manifest before the final
+  complete manifest;
+- treatment cadence in `[1,N)`, which produces at least one periodic manifest;
+- identical RunSpec, engine configuration, build fingerprint, and temporary
+  filesystem parent for both variants;
+- fresh run stores and bitwise-identical fixed-tree aggregates; and
+- alternating control-first/treatment-first order (`AB`, then `BA`).
+
+Each CSV row retains the gate schema version, one pair's two raw durations, two
+rates, signed pairwise loss, order, complete workload configuration, build
+fingerprint, and price. The robust summary and every decision flag are repeated
+on each row so a selected row cannot be detached from the policy that
+classified the capture. Temporary stores are unique children of the system
+temporary directory or `--workspace`. Both stores are deleted after each pair
+to bound disk use; only that unique harness workspace is removed.
+
+The summary uses Hyndman–Fan type-7 quartiles, the unscaled median absolute
+deviation, and a deterministic percentile-bootstrap 95% interval for the
+median signed loss. The fixed default bootstrap seed spells `R4CHKPT` in ASCII;
+recomputing the summary from identical raw rows is therefore bitwise
+reproducible. Resampling randomness does not affect measured timings.
+
+The gate passes only when all four conditions hold:
+
+1. at least 20 measured pairs are present;
+2. the 95% bootstrap interval's upper endpoint is strictly below 10% loss;
+3. the absolute robust control-rate drift is at most 5%; and
+4. the absolute AB-versus-BA median-loss difference is at most 5 percentage
+   points.
+
+Control drift is the Theil–Sen median pairwise slope projected from the first to
+last pair and divided by the median control rate. The order effect is the
+control-first median loss minus the treatment-first median loss. Five percent
+is deliberately half the performance target: a host trend or order effect
+large enough to consume half the allowed checkpoint loss invalidates the
+capture rather than being explained away. The thresholds, bootstrap seed, and
+all component flags are emitted in the CSV.
+
+`--require-pass` returns exit status 2 after emitting the complete CSV when the
+statistical gate is not met. Without it, exploratory captures still return zero
+when execution was valid and expose `gate_pass=0`; a statistical miss is not a
+program failure. Input or invariant failures return 1 and never become evidence.
+The tool allows 2–100 pairs for bounded exploratory use, but fewer than 20 can
+never pass.
+
+The statistics implementation is tool-local and linked only into the gate
+binary and its tests. It is not a production runtime source, public `mc` API,
+or input to the runtime source fingerprint. Adding or changing reporting logic
+therefore cannot alter a simulation path or make an existing durable run
+incompatible.
+
 ## Captured local evidence
 
 The CSV snapshots were captured on 2026-08-14 on an Apple M1 MacBook Air with
@@ -214,14 +278,14 @@ the gate by a large margin and the non-durable baseline varied by about 84%.
 The original one-repetition CSV remains unchanged evidence; the six newer raw
 rows are stored separately rather than rewriting history.
 
-Before release, rerun this gate on an isolated, thermally stable host using a
-predeclared protocol: at least 20 paired final-only/sparse-checkpoint trials;
-balanced, alternating AB/BA order; identical inputs and build; all raw
-per-trial timings retained; and signed pairwise throughput loss reported with
-the median, interquartile range, median absolute deviation, and a 95% bootstrap
-confidence interval. Negative pairwise loss is valid measurement noise (the
-sparse run happened to be faster), not a negative physical checkpoint cost.
-Do not pass the gate if control-rate drift or an order effect is material, and
-otherwise require the upper confidence bound on loss to be below 10%. Building
-this rigorous gate harness is release work, but does not block independent R5
-model development.
+The rigorous harness is now implemented and tested. The remaining release work
+is to run the command above on an isolated, thermally stable host and retain its
+CSV without modifying the predeclared policy. Negative pairwise loss is valid
+measurement noise (the sparse run happened to be faster), not a negative
+physical checkpoint cost. The gate stays open until a capture reports
+`gate_pass=1`; building the harness alone is not performance evidence.
+
+Harness verification passes 46/46 optimized unit tests. Release, ASan/UBSan,
+and ThreadSanitizer builds each pass all 14 CTest targets, including valid CSV
+shape, insufficient-sample behavior, deterministic bootstrap reproduction,
+loss/drift/order rejection, and invalid-cadence rejection.

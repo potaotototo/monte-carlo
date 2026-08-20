@@ -140,6 +140,8 @@ Run the full R4 benchmark tools and see their contracts:
 ```sh
 ./build/benchmark_aggregation --scenarios 1000000 --repeats 3 --max-workers 8
 ./build/benchmark_persistence --scenarios 200000 --repeats 3
+./build/benchmark_checkpoint_gate --pairs 20 --require-pass \
+  > docs/R4_CHECKPOINT_GATE_20_PAIRS.csv
 ```
 
 Run 1,000 deterministic crash schedules and retain only failures:

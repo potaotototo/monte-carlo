@@ -13,6 +13,7 @@
 #include "mc/run_spec.hpp"
 
 #include "../tools/process_watchdog.hpp"
+#include "../tools/checkpoint_gate_stats.hpp"
 
 #include <atomic>
 #include <bit>
@@ -2024,6 +2025,98 @@ void coordinator_validation_state_machine() {
           "wrong block observation count should be rejected");
 }
 
+void checkpoint_gate_statistics_and_decisions() {
+    mc::tool::CheckpointGatePolicy policy;
+    policy.bootstrap_samples = 2'000U;
+    std::vector<mc::tool::CheckpointGateObservation> observations;
+    observations.reserve(20U);
+    for (std::size_t pair = 0U; pair < 20U; ++pair) {
+        observations.push_back({1'000.0, 950.0, pair % 2U == 0U});
+    }
+    const mc::tool::CheckpointGateSummary passing =
+        mc::tool::summarize_checkpoint_gate(observations, policy);
+    const mc::tool::CheckpointGateSummary repeated =
+        mc::tool::summarize_checkpoint_gate(observations, policy);
+    check_near(passing.median_loss_percent, 5.0, 1.0e-12,
+               "checkpoint gate computed the wrong paired loss");
+    check_near(passing.confidence_95_low_percent, 5.0, 1.0e-12,
+               "checkpoint gate computed the wrong lower interval");
+    check_near(passing.confidence_95_high_percent, 5.0, 1.0e-12,
+               "checkpoint gate computed the wrong upper interval");
+    check_near(passing.control_drift_percent, 0.0, 1.0e-12,
+               "checkpoint gate invented control drift");
+    check_near(passing.order_effect_percentage_points, 0.0, 1.0e-12,
+               "checkpoint gate invented an order effect");
+    check(std::bit_cast<std::uint64_t>(passing.confidence_95_low_percent) ==
+                  std::bit_cast<std::uint64_t>(
+                      repeated.confidence_95_low_percent) &&
+              std::bit_cast<std::uint64_t>(passing.confidence_95_high_percent) ==
+                  std::bit_cast<std::uint64_t>(
+                      repeated.confidence_95_high_percent),
+          "checkpoint gate bootstrap is not deterministically reproducible");
+    check(passing.sufficient_pairs && passing.confidence_gate_pass &&
+              passing.control_drift_gate_pass &&
+              passing.order_effect_gate_pass && passing.gate_pass,
+          "checkpoint gate rejected stable passing evidence");
+
+    std::vector<mc::tool::CheckpointGateObservation> high_loss = observations;
+    for (mc::tool::CheckpointGateObservation& observation : high_loss) {
+        observation.treatment_scenarios_per_second = 800.0;
+    }
+    const mc::tool::CheckpointGateSummary failed_loss =
+        mc::tool::summarize_checkpoint_gate(high_loss, policy);
+    check(!failed_loss.confidence_gate_pass && !failed_loss.gate_pass,
+          "checkpoint gate accepted a 20% checkpoint loss");
+
+    std::vector<mc::tool::CheckpointGateObservation> drift = observations;
+    for (std::size_t pair = 0U; pair < drift.size(); ++pair) {
+        drift[pair].control_scenarios_per_second =
+            1'000.0 + 10.0 * static_cast<double>(pair);
+        drift[pair].treatment_scenarios_per_second =
+            0.95 * drift[pair].control_scenarios_per_second;
+    }
+    const mc::tool::CheckpointGateSummary failed_drift =
+        mc::tool::summarize_checkpoint_gate(drift, policy);
+    check(!failed_drift.control_drift_gate_pass && !failed_drift.gate_pass,
+          "checkpoint gate ignored material control drift");
+
+    std::vector<mc::tool::CheckpointGateObservation> order_effect = observations;
+    for (mc::tool::CheckpointGateObservation& observation : order_effect) {
+        observation.treatment_scenarios_per_second =
+            observation.control_first ? 950.0 : 850.0;
+    }
+    const mc::tool::CheckpointGateSummary failed_order =
+        mc::tool::summarize_checkpoint_gate(order_effect, policy);
+    check(!failed_order.order_effect_gate_pass && !failed_order.gate_pass,
+          "checkpoint gate ignored a material AB/BA order effect");
+
+    const mc::tool::CheckpointGateSummary insufficient =
+        mc::tool::summarize_checkpoint_gate(
+            std::span<const mc::tool::CheckpointGateObservation>{observations}
+                .first(4U),
+            policy);
+    check(!insufficient.sufficient_pairs && !insufficient.gate_pass,
+          "checkpoint gate passed an exploratory four-pair sample");
+
+    std::vector<mc::tool::CheckpointGateObservation> unbalanced(2U);
+    unbalanced[0] = {1'000.0, 950.0, true};
+    unbalanced[1] = {1'000.0, 950.0, true};
+    check_throws(
+        [&] {
+            static_cast<void>(
+                mc::tool::summarize_checkpoint_gate(unbalanced, policy));
+        },
+        "checkpoint gate accepted an unbalanced AB/BA design");
+    unbalanced[1] = {1'000.0,
+                     std::numeric_limits<double>::quiet_NaN(), false};
+    check_throws(
+        [&] {
+            static_cast<void>(
+                mc::tool::summarize_checkpoint_gate(unbalanced, policy));
+        },
+        "checkpoint gate accepted a non-finite timing observation");
+}
+
 void runtime_metrics_are_opt_in_and_result_neutral() {
     mc::RunSpec spec;
     spec.global_seed = 0x4D455452494353ULL;
@@ -2450,6 +2543,8 @@ int main(int argc, char** argv) {
          r3_trace_replay_is_deterministic},
         {"coordinator_validation_state_machine",
          coordinator_validation_state_machine},
+        {"checkpoint_gate_statistics_and_decisions",
+         checkpoint_gate_statistics_and_decisions},
         {"runtime_metrics_are_opt_in_and_result_neutral",
          runtime_metrics_are_opt_in_and_result_neutral},
         {"bounded_queue_reports_only_actual_blocking",

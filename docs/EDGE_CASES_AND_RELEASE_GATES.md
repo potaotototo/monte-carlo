@@ -21,6 +21,7 @@ in `R3_FAILURE_INJECTION.md`; and the Heston discretization contract is in
 | Extreme model parameters | Derived constants and every path step are checked contextually | Overflow and underflow fail closed | Complete |
 | Crash handling | Atomic full manifests plus nine replayable process-crash hooks and immutable schema-v2 evidence | Power-loss/filesystem fault harness remains outside scope | R3 complete |
 | Runtime metrics | Opt-in monotonic timings, bounded queue peaks, and durable stage counters | Scheduling perturbation and missing recovered-block samples are explicit | R4 phase 1 complete |
+| Checkpoint performance evidence | Alternating AB/BA pairs, raw timings, robust spread, bootstrap interval, drift and order checks | Harness complete; isolated-host 20-pair capture still required | R4 gate open |
 | Heston variance | Full-truncation Euler uses `max(v,0)` without rewriting the stored state | Discretization version is pinned and non-finite paths fail with context | R5 phase 1 complete |
 | Feller violation | Valid run with a structured ratio warning below 1 | Bias risk remains visible in CLI and recovered metadata | R5 phase 1 complete |
 | Heston analytic limit | Stable Riccati algebra avoids `(z-d)/xi^2` cancellation; exact `xi=0` uses integrated deterministic variance | QuantLib grid and tiny-`xi` regression pass | R5 phase 2 complete |
@@ -394,3 +395,12 @@ store caller may deliberately exceed that cadence; excess latency observations
 increment `checkpoint_samples_dropped` while the manifest operation continues.
 Metrics exhaustion must never turn a successfully installed manifest into an
 exception after the fact.
+
+Checkpoint cost is another paired-measurement edge. Comparing a median from one
+batch with a median from a later batch confounds checkpoint cadence with host
+drift. The release harness therefore alternates final-only and sparse-checkpoint
+order within pairs, computes signed loss within each pair, and separately
+rejects material control-rate drift or AB/BA order effects. Fewer than 20 pairs
+are always exploratory. A favorable sample median cannot override an upper 95%
+bootstrap bound at or above 10%, and the implemented harness does not by itself
+close the performance gate.
