@@ -19,7 +19,7 @@ in `R3_FAILURE_INJECTION.md`; and the Heston discretization contract is in
 | Test comparisons | Tolerance assertions reject NaN; European and Asian block hashes are golden | Numerical regressions cannot pass through NaN comparison behavior | Complete |
 | Coordinator reconstruction | Canonical IDs/ranges, coverage, incarnations, epochs, and pair boundaries are checked after decode | Invalid snapshots fall back or fail closed | Complete |
 | Extreme model parameters | Derived constants and every path step are checked contextually | Overflow and underflow fail closed | Complete |
-| Crash handling | Atomic full manifests plus nine replayable process-crash hooks and immutable schema-v2 evidence | Power-loss/filesystem fault harness remains outside scope | R3 complete |
+| Crash handling | Atomic full manifests plus nine replayable single-worker process-crash hooks and immutable schema-v2 evidence | Multi-worker campaign, live lease expiry, and syscall fault injection remain P0 work | R3 protocol implemented; original gate open |
 | Runtime metrics | Opt-in monotonic timings, bounded queue peaks, and durable stage counters | Scheduling perturbation and missing recovered-block samples are explicit | R4 phase 1 complete |
 | Checkpoint performance evidence | Alternating AB/BA pairs, raw timings, robust spread, bootstrap interval, drift and order checks | Harness complete; isolated-host 20-pair capture still required | R4 gate open |
 | Heston variance | Full-truncation Euler uses `max(v,0)` without rewriting the stored state | Discretization version is pinned and non-finite paths fail with context | R5 phase 1 complete |
@@ -27,6 +27,8 @@ in `R3_FAILURE_INJECTION.md`; and the Heston discretization contract is in
 | Heston analytic limit | Stable Riccati algebra avoids `(z-d)/xi^2` cancellation; exact `xi=0` uses integrated deterministic variance | QuantLib grid and tiny-`xi` regression pass | R5 phase 2 complete |
 | Heston Fourier tail | Raw cutoff 200 silently understated short-maturity prices by up to 89.8% | Variance-normalized adaptive expansion, tail/error gates, finite work budget, and eight independent regressions | R5 phase 2 follow-up complete |
 | Multi-driver RNG | Heston uses fixed dimensions 0 and 1, then explicit correlation | Individual and interleaved 1 GiB PractRand 0.96 confirmations pass | R5 phase 2 complete |
+| Aggregate representability | Welford leaves and fixed-tree pairwise merges are deterministic but binary64 can still overflow | Merge inputs/results fail closed; confidence bounds never expose infinity | P0.0 complete |
+| Manifest lease semantics | Current-incarnation results equal the high-water lease; older results cannot exceed it or the run incarnation | Canonical codec rejects future incarnations and regressed high-water tables | P0.0 complete |
 
 ## 1. Uniform precision and why binary64 calls for 53 random bits
 

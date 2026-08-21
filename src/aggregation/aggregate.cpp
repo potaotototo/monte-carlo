@@ -80,6 +80,14 @@ std::optional<std::string> AggregateStats::invariant_error(
 }
 
 AggregateStats merge(const AggregateStats& left, const AggregateStats& right) {
+    if (const std::optional<std::string> error = left.invariant_error();
+        error.has_value()) {
+        throw std::invalid_argument("left aggregate is invalid: " + *error);
+    }
+    if (const std::optional<std::string> error = right.invariant_error();
+        error.has_value()) {
+        throw std::invalid_argument("right aggregate is invalid: " + *error);
+    }
     if (left.n == 0) {
         return right;
     }
@@ -100,6 +108,11 @@ AggregateStats merge(const AggregateStats& left, const AggregateStats& right) {
     result.m2 = left.m2 + right.m2 + delta * delta * (left_n * right_n / total_n);
     result.min = std::min(left.min, right.min);
     result.max = std::max(left.max, right.max);
+    if (const std::optional<std::string> error = result.invariant_error();
+        error.has_value()) {
+        throw std::overflow_error("merged aggregate is not representable: " +
+                                  *error);
+    }
     return result;
 }
 

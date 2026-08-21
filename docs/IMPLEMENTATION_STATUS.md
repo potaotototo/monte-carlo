@@ -321,3 +321,27 @@ compiler warnings and `git diff --check` are clean. ASan again uses
 `detect_leaks=0` because LeakSanitizer is unavailable on this macOS runtime,
 and TSan keeps race detection fatal while disabling only thread-leak reports
 from intentional crash-child `_exit` paths.
+
+## P0.0 — baseline and core invariant audit
+
+The original-plan status has been audited rather than inferred from the
+implemented architecture. R3's single-worker process-crash protocol remains
+implemented and tested, but overall R3 closure is reopened until P0 supplies a
+true multi-worker several-thousand-case campaign, live lease expiry and
+reassignment, persistence-degraded semantics, and deterministic syscall-level
+filesystem fault injection. R4 likewise retains both its eight-worker
+efficiency and checkpoint-throughput-loss gates.
+
+The audit fixed two correctness gaps and one robustness gap without changing
+normal numerical results: pairwise aggregation now rejects non-representable
+merged statistics; canonical manifests reject results from a future
+incarnation or above their lease high-water mark; and unrepresentable
+confidence bounds are unavailable rather than infinite. Golden payloads remain
+unchanged.
+
+Verification after these changes: 46/46 optimized tests pass. Fresh Release,
+ASan/UBSan, and ThreadSanitizer builds each pass all 14 CTest targets; Apple
+Clang static analysis reports no findings, compiler warnings are clean, and
+`git diff --check` passes. The full invariant map, lifecycle, crash-point table,
+ranked findings, exact baseline, and phase gates are recorded in
+`P0_BASELINE_AUDIT.md`.

@@ -191,16 +191,18 @@ docs/             phased implementation notes
 | R1 | Deterministic parallel block execution and scenario-keyed RNG | Complete |
 | R1.5 | Frozen hashes/result validation and pre-persistence hardening | Complete |
 | R2 | Durable block results, atomic manifests, and restart recovery | Complete |
-| R3 | Deterministic crash injection and replay descriptors | Complete |
-| R4 | Synchronization, coordinator, persistence, and recovery benchmarks | Phase 2 implemented; 8-worker efficiency gate open |
+| R3 | Deterministic crash injection and replay descriptors | Process-crash protocol implemented; original P0 closure reopened for multi-worker leases and filesystem faults |
+| R4 | Synchronization, coordinator, persistence, and recovery benchmarks | Phase 2 implemented; 8-worker efficiency and checkpoint-loss gates open |
 | R5 | Deterministic Heston stochastic volatility | Phase 2 complete, including independent prices and a 1 GiB external RNG battery |
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the phased handoff and acceptance evidence.
 The durable file, commit, and recovery contract is specified in [docs/R2_DURABLE_RECOVERY.md](docs/R2_DURABLE_RECOVERY.md).
 The crash-point, descriptor, matrix, and replay contract is specified in [docs/R3_FAILURE_INJECTION.md](docs/R3_FAILURE_INJECTION.md).
-The opt-in measurement contract is specified in [docs/R4_METRICS.md](docs/R4_METRICS.md), and the benchmark methodology, captured baselines, tuning decisions, and remaining performance gate are in [docs/R4_BENCHMARKS.md](docs/R4_BENCHMARKS.md).
+The opt-in measurement contract is specified in [docs/R4_METRICS.md](docs/R4_METRICS.md), and the benchmark methodology, captured baselines, tuning decisions, and remaining performance gates are in [docs/R4_BENCHMARKS.md](docs/R4_BENCHMARKS.md).
 The first measured R1.5 scaling snapshot is in [docs/R1_5_BASELINE.csv](docs/R1_5_BASELINE.csv).
 Known numerical, protocol, resource, and recovery edge cases—including the rationale for a 53-bit binary64 uniform—are tracked in [docs/EDGE_CASES_AND_RELEASE_GATES.md](docs/EDGE_CASES_AND_RELEASE_GATES.md).
-The Heston equations, analytic reference grids, adaptive-tail decision,
-full-truncation decision, Feller warning, identity compatibility, and remaining
-R5 validation gate are documented in [docs/R5_HESTON.md](docs/R5_HESTON.md).
+The P0 invariant audit, ranked gaps, and current crash-point table are in
+[docs/P0_BASELINE_AUDIT.md](docs/P0_BASELINE_AUDIT.md). The Heston equations,
+analytic reference grids, adaptive-tail decision, full-truncation decision,
+Feller warning, and identity compatibility are documented in
+[docs/R5_HESTON.md](docs/R5_HESTON.md).

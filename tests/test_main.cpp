@@ -494,6 +494,16 @@ void aggregate_and_merge() {
     const mc::AggregateStats combined = mc::merge(left, right);
     check_near(combined.mean, all.mean, 1e-15, "pairwise mean mismatch");
     check_near(combined.m2, all.m2, 1e-15, "pairwise m2 mismatch");
+
+    mc::AggregateStats extreme_positive;
+    extreme_positive.add(std::numeric_limits<double>::max());
+    mc::AggregateStats extreme_negative;
+    extreme_negative.add(-std::numeric_limits<double>::max());
+    check_throws(
+        [&] {
+            static_cast<void>(mc::merge(extreme_positive, extreme_negative));
+        },
+        "pairwise merge silently produced non-finite aggregate statistics");
 }
 
 void small_sample_and_aggregate_invariants() {
@@ -532,6 +542,12 @@ void small_sample_and_aggregate_invariants() {
     check(large_result.confidence_low().has_value() &&
               large_result.confidence_high().has_value(),
           "normal confidence interval should be available at the declared threshold");
+
+    check(!large_result.confidence_low(
+               std::numeric_limits<double>::max()).has_value() &&
+              !large_result.confidence_high(
+                  std::numeric_limits<double>::max()).has_value(),
+          "unrepresentable confidence interval was exposed as infinity");
 
     mc::AggregateStats invalid = one;
     invalid.m2 = -1.0;
@@ -1235,6 +1251,24 @@ void durable_codec_contract() {
     check_aggregate_exact(decoded_manifest.committed_aggregate,
                           result.aggregate,
                           "manifest round trip changed aggregate bits");
+
+    mc::RunManifest regressed_lease = manifest;
+    regressed_lease.run_incarnation = 2U;
+    regressed_lease.lease_epochs[0] = 1U;
+    regressed_lease.committed_blocks[0].lease_epoch = 2U;
+    check_throws(
+        [&] {
+            static_cast<void>(mc::encode_manifest(regressed_lease));
+        },
+        "manifest accepted a committed lease above its high-water mark");
+
+    mc::RunManifest future_result = manifest;
+    future_result.committed_blocks[0].result_incarnation = 2U;
+    check_throws(
+        [&] {
+            static_cast<void>(mc::encode_manifest(future_result));
+        },
+        "manifest accepted a result from a future run incarnation");
 
     mc::RunManifest failed_manifest = manifest;
     failed_manifest.status = mc::DurableRunStatus::Failed;
