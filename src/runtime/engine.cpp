@@ -56,6 +56,30 @@ void clear_commit_samples(RuntimeMetrics* metrics) noexcept {
     }
 }
 
+std::optional<double> confidence_bound(const AggregateStats& aggregate,
+                                       double z,
+                                       bool upper) {
+    if (!std::isfinite(z) || z <= 0.0) {
+        throw std::invalid_argument(
+            "confidence critical value must be finite and positive");
+    }
+    if (aggregate.n < kMinNormalConfidenceObservations) {
+        return std::nullopt;
+    }
+    const std::optional<double> error = aggregate.standard_error();
+    if (!error.has_value()) {
+        return std::nullopt;
+    }
+    const double half_width = z * *error;
+    const double low = aggregate.mean - half_width;
+    const double high = aggregate.mean + half_width;
+    if (!std::isfinite(half_width) || !std::isfinite(low) ||
+        !std::isfinite(high)) {
+        return std::nullopt;
+    }
+    return upper ? high : low;
+}
+
 class TotalMetricsTimer {
 public:
     TotalMetricsTimer(RuntimeMetrics* metrics,
@@ -383,29 +407,11 @@ void EngineConfig::validate(const RunSpec& spec) const {
 }
 
 std::optional<double> RunResult::confidence_low(double z) const {
-    if (!std::isfinite(z) || z <= 0.0) {
-        throw std::invalid_argument("confidence critical value must be finite and positive");
-    }
-    if (aggregate.n < kMinNormalConfidenceObservations) {
-        return std::nullopt;
-    }
-    const std::optional<double> error = aggregate.standard_error();
-    return error.has_value()
-               ? std::optional<double>{aggregate.mean - z * *error}
-               : std::nullopt;
+    return confidence_bound(aggregate, z, false);
 }
 
 std::optional<double> RunResult::confidence_high(double z) const {
-    if (!std::isfinite(z) || z <= 0.0) {
-        throw std::invalid_argument("confidence critical value must be finite and positive");
-    }
-    if (aggregate.n < kMinNormalConfidenceObservations) {
-        return std::nullopt;
-    }
-    const std::optional<double> error = aggregate.standard_error();
-    return error.has_value()
-               ? std::optional<double>{aggregate.mean + z * *error}
-               : std::nullopt;
+    return confidence_bound(aggregate, z, true);
 }
 
 std::vector<ScenarioBlock> make_blocks(const RunSpec& spec,

@@ -541,6 +541,12 @@ std::vector<std::uint8_t> encode_manifest(const RunManifest& manifest) {
     for (const ManifestEntry& entry : manifest.committed_blocks) {
         if (entry.block_id >= manifest.block_count ||
             entry.result_incarnation == 0U || entry.lease_epoch == 0U ||
+            entry.result_incarnation > manifest.run_incarnation ||
+            entry.lease_epoch > manifest.lease_epochs[
+                                    static_cast<std::size_t>(entry.block_id)] ||
+            (entry.result_incarnation == manifest.run_incarnation &&
+             entry.lease_epoch != manifest.lease_epochs[
+                                      static_cast<std::size_t>(entry.block_id)]) ||
             (!first && entry.block_id <= previous_id)) {
             throw std::invalid_argument("manifest entries are not canonical");
         }
@@ -662,6 +668,12 @@ RunManifest decode_manifest(const std::vector<std::uint8_t>& bytes,
         entry.payload_checksum = reader.digest();
         if (entry.block_id >= manifest.block_count ||
             entry.result_incarnation == 0U || entry.lease_epoch == 0U ||
+            entry.result_incarnation > manifest.run_incarnation ||
+            entry.lease_epoch > manifest.lease_epochs[
+                                    static_cast<std::size_t>(entry.block_id)] ||
+            (entry.result_incarnation == manifest.run_incarnation &&
+             entry.lease_epoch != manifest.lease_epochs[
+                                      static_cast<std::size_t>(entry.block_id)]) ||
             (index != 0U && entry.block_id <= previous_id)) {
             throw std::runtime_error("manifest entries are not canonical");
         }
